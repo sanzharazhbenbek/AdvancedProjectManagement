@@ -24,6 +24,7 @@ from .config import settings
 from .database import Base, build_engine, build_session_factory
 from .models import Event, Ticket, User
 from .security import hash_password, normalize_email, verify_password
+from .seed import seed_default_users
 
 
 BASE_PATH = Path(__file__).resolve().parent
@@ -53,6 +54,8 @@ def create_app(database_url: str | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         Base.metadata.create_all(bind=engine)
         migrate_existing_schema(engine)
+        with SessionLocal() as session:
+            seed_default_users(session)
         yield
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
