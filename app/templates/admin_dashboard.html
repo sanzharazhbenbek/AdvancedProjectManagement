@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="container py-5">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4">
+      <div>
+        <span class="eyebrow">Administrative control</span>
+        <h1 class="section-heading mt-2">Admin dashboard</h1>
+        <p class="text-secondary mb-0">Oversee account roles, platform access, event volume, and booking activity.</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-dark rounded-pill px-4" href="/organizer">Organizer view</a>
+        <a class="btn btn-primary rounded-pill px-4" href="/reports">Reports</a>
+      </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Accounts</div>
+          <div class="metric-value">{{ user_rows|length }}</div>
+          <div class="metric-note">{{ admin_count }} active admin account{% if admin_count != 1 %}s{% endif %}</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Published events</div>
+          <div class="metric-value">{{ stats.total_events }}</div>
+          <div class="metric-note">{{ stats.upcoming_events }} upcoming</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Tickets sold</div>
+          <div class="metric-value">{{ stats.tickets_sold }}</div>
+          <div class="metric-note">{{ stats.checked_in }} checked in</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Revenue</div>
+          <div class="metric-value">{{ stats.revenue | money }}</div>
+          <div class="metric-note">{{ stats.sell_through }}% sell-through</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-xl-8">
+        <div class="panel-card p-4 h-100">
+          <h2 class="section-title mb-3">User access management</h2>
+          <div class="table-responsive">
+            <table class="table align-middle dashboard-table mb-0">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Activity</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in user_rows %}
+                  <tr>
+                    <td>
+                      <strong>{{ row.user.full_name }}</strong>
+                      <div class="small text-secondary">{{ row.user.email }}</div>
+                    </td>
+                    <td>
+                      <form class="d-flex gap-2 align-items-center" method="post" action="/admin/users/{{ row.user.id }}/role">
+                        <select class="form-select form-select-sm rounded-pill" name="role">
+                          {% for role_key, role_label in role_labels.items() %}
+                            <option value="{{ role_key }}" {% if row.user.role == role_key %}selected{% endif %}>{{ role_label }}</option>
+                          {% endfor %}
+                        </select>
+                        <button class="btn btn-sm btn-outline-dark rounded-pill px-3" type="submit">Save</button>
+                      </form>
+                    </td>
+                    <td>
+                      {% if row.user.is_active %}
+                        <span class="badge rounded-pill status-live">Active</span>
+                      {% else %}
+                        <span class="badge rounded-pill status-completed">Inactive</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      <div>{{ row.event_count }} event{% if row.event_count != 1 %}s{% endif %}</div>
+                      <div class="small text-secondary">{{ row.ticket_count }} ticket{% if row.ticket_count != 1 %}s{% endif %}</div>
+                    </td>
+                    <td class="text-end">
+                      <form method="post" action="/admin/users/{{ row.user.id }}/status">
+                        <button class="btn btn-sm btn-outline-dark rounded-pill px-3" type="submit">
+                          {% if row.user.is_active %}Deactivate{% else %}Activate{% endif %}
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                {% else %}
+                  <tr>
+                    <td colspan="5" class="text-center text-secondary py-5">No accounts yet.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-xl-4">
+        <div class="panel-card p-4 h-100">
+          <h2 class="section-title mb-3">Recent bookings</h2>
+          <div class="d-grid gap-3">
+            {% for ticket in recent_tickets %}
+              <div class="mini-ticket">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                  <div>
+                    <strong>{{ ticket.purchaser.full_name if ticket.purchaser else ticket.purchaser_name }}</strong>
+                    <div class="small text-secondary">{{ ticket.event.title }}</div>
+                  </div>
+                  <span class="badge rounded-pill text-bg-light">{{ ticket.quantity }}</span>
+                </div>
+                <div class="small text-secondary mt-2">{{ ticket.created_at | datetime }} • {{ ticket.payment_status }}</div>
+              </div>
+            {% else %}
+              <p class="text-secondary mb-0">Recent confirmed bookings will appear here.</p>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}

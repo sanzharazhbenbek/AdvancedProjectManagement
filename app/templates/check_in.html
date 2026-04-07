@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="container py-5">
+    <div class="row justify-content-center">
+      <div class="col-xl-9">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+          <div>
+            <span class="eyebrow">Entry operations</span>
+            <h1 class="section-heading mt-2 mb-0">Check in attendees</h1>
+          </div>
+          <a class="btn btn-outline-dark rounded-pill px-4" href="/organizer">&larr; Back to dashboard</a>
+        </div>
+
+        <div class="row g-3 mb-4">
+          <div class="col-md-4">
+            <div class="panel-card p-4 h-100">
+              <div class="metric-label">Checked in</div>
+              <div class="metric-value">{{ stats.checked_in }}</div>
+              <div class="metric-note">Guests already admitted</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="panel-card p-4 h-100">
+              <div class="metric-label">Pending arrivals</div>
+              <div class="metric-value">{{ stats.pending_arrivals }}</div>
+              <div class="metric-note">Confirmed tickets not yet scanned</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="panel-card p-4 h-100">
+              <div class="metric-label">Live operations</div>
+              <div class="metric-value">{{ stats.running_events }}</div>
+              <div class="metric-note">Events active in the current window</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-card p-4 p-lg-5 mb-4">
+          <span class="eyebrow">QR validation</span>
+          <p class="text-secondary mb-4">Scan the attendee QR code or enter the ticket code manually to review and confirm entry.</p>
+
+          <form class="row g-3 align-items-end" method="post" action="/organizer/check-in">
+            <div class="col-md-8">
+              <label class="form-label">Ticket code</label>
+              <input class="form-control form-control-lg rounded-4" type="text" name="code" value="{{ code }}" placeholder="EVT-1A2B3C4D" required />
+            </div>
+            <div class="col-md-4 d-grid">
+              <input type="hidden" name="action" value="lookup" />
+              <button class="btn btn-dark btn-lg rounded-pill" type="submit">Find ticket</button>
+            </div>
+          </form>
+        </div>
+
+        {% if message %}
+          <div class="alert alert-{{ message[0] }} rounded-4">{{ message[1] }}</div>
+        {% endif %}
+
+        {% if ticket %}
+          <div class="panel-card p-4 p-lg-5">
+            <div class="row g-4 align-items-center">
+              <div class="col-lg-8">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  <span class="badge rounded-pill text-bg-light">{{ ticket.event.category }}</span>
+                  <span class="badge rounded-pill text-bg-light">{{ ticket.event.title }}</span>
+                </div>
+                <h2 class="section-title">{{ ticket.purchaser_name }}</h2>
+                <p class="text-secondary">{{ ticket.ticket_code }} • {{ ticket.quantity }} seat{% if ticket.quantity > 1 %}s{% endif %} • {{ ticket.total_amount | money }}</p>
+                <div class="small text-secondary mb-4">{{ ticket.event.venue }}, {{ ticket.event.city }} • {{ ticket.event.event_date | datetime }}</div>
+
+                {% if ticket.checked_in_at %}
+                  <div class="alert alert-warning rounded-4 mb-0">Already checked in at {{ ticket.checked_in_at | datetime }}</div>
+                {% else %}
+                  <form method="post" action="/organizer/check-in">
+                    <input type="hidden" name="code" value="{{ ticket.ticket_code }}" />
+                    <input type="hidden" name="action" value="confirm" />
+                    <button class="btn btn-primary btn-lg rounded-pill px-4" type="submit">Mark as checked in</button>
+                  </form>
+                {% endif %}
+              </div>
+              <div class="col-lg-4">
+                <div class="panel-subtle rounded-4 p-4">
+                  <div class="metric-label">Payment status</div>
+                  <div class="metric-value fs-3">{{ ticket.payment_status }}</div>
+                  <div class="metric-note">Method: {{ ticket.payment_method }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+{% endblock %}

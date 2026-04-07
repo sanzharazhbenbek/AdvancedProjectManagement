@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="hero-section">
+    <div class="container">
+      <div class="row align-items-center gy-4">
+        <div class="col-lg-7">
+          <span class="eyebrow">Event management platform</span>
+          <h1 class="display-4 hero-title mt-3">Sell tickets, manage guests, and run smoother event days.</h1>
+          <p class="hero-copy mt-3">
+            EventSphere gives organizers one workspace for publishing events, tracking capacity, confirming purchases, and validating entry with digital tickets.
+          </p>
+          <div class="d-flex flex-wrap gap-3 mt-4">
+            {% if current_user %}
+              {% if current_user.role in ['organizer', 'admin'] %}
+                <a class="btn btn-primary btn-lg rounded-pill px-4" href="/organizer/events/new">Create event</a>
+                <a class="btn btn-outline-dark btn-lg rounded-pill px-4" href="/organizer">Open dashboard</a>
+              {% else %}
+                <a class="btn btn-primary btn-lg rounded-pill px-4" href="/my-tickets">My tickets</a>
+                <a class="btn btn-outline-dark btn-lg rounded-pill px-4" href="#events-list">Browse events</a>
+              {% endif %}
+            {% else %}
+              <a class="btn btn-primary btn-lg rounded-pill px-4" href="/auth/register">Create account</a>
+              <a class="btn btn-outline-dark btn-lg rounded-pill px-4" href="/auth/login">Sign in</a>
+            {% endif %}
+          </div>
+        </div>
+        <div class="col-lg-5">
+          <div class="hero-panel panel-card p-4 p-lg-5">
+            <div class="hero-panel-header">
+              <span class="panel-tag">Platform snapshot</span>
+              {% if current_user and current_user.role in ['organizer', 'admin'] %}
+                <a class="text-link small" href="/reports">View analytics</a>
+              {% elif current_user %}
+                <a class="text-link small" href="/my-tickets">My tickets</a>
+              {% else %}
+                <a class="text-link small" href="/auth/register">Get started</a>
+              {% endif %}
+            </div>
+            <div class="stats-cluster mt-3">
+              <div class="stat-card">
+                <span class="stat-label">Events</span>
+                <strong>{{ stats.total_events }}</strong>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Tickets sold</span>
+                <strong>{{ stats.tickets_sold }}</strong>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Pending arrivals</span>
+                <strong>{{ stats.pending_arrivals }}</strong>
+              </div>
+              <div class="stat-card accent">
+                <span class="stat-label">Revenue</span>
+                <strong>{{ stats.revenue | money }}</strong>
+              </div>
+            </div>
+
+            {% if featured_event %}
+              <div class="featured-snippet mt-4">
+                <div class="featured-label">Featured next</div>
+                <div class="featured-name">{{ featured_event.title }}</div>
+                <div class="small text-secondary">{{ featured_event.event_date | datetime }} • {{ featured_event.venue }}</div>
+                <div class="d-flex justify-content-between align-items-center mt-3">
+                  <span class="badge rounded-pill {{ featured_event.status_variant }}">{{ featured_event.status_label }}</span>
+                  <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/events/{{ featured_event.id }}">Open event</a>
+                </div>
+              </div>
+            {% else %}
+              <div class="featured-snippet mt-4">
+                <div class="featured-label">What happens next</div>
+                <div class="featured-name">Your next event can start here.</div>
+                <div class="small text-secondary">Publish an event, open registrations, and keep ticketing and check-in in one place.</div>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="container">
+    <div class="feature-strip">
+      <div class="feature-card">
+        <h3>Event publishing</h3>
+        <p>Launch branded event pages with venue details, schedules, pricing, and capacity controls.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Digital ticketing</h3>
+        <p>Capture bookings instantly and deliver ticket codes with QR-based validation links.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Operations dashboard</h3>
+        <p>Track sell-through, arrivals, and event performance from one organizer workspace.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="container mt-4" id="events-list">
+    <div class="panel-card p-4 mb-4">
+      <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+        <div>
+          <h2 class="section-title mb-1">Browse events</h2>
+          <p class="text-secondary mb-0">Timezone: {{ timezone_label }} • Sell-through: {{ stats.sell_through }}%</p>
+        </div>
+        <form class="d-flex gap-2 w-100 w-lg-auto" method="get" action="/">
+          <input
+            class="form-control form-control-lg rounded-pill"
+            type="search"
+            name="q"
+            value="{{ query }}"
+            placeholder="Search by title, city, or category"
+          />
+          <button class="btn btn-dark rounded-pill px-4" type="submit">Search</button>
+        </form>
+      </div>
+      {% if category_highlights %}
+        <div class="category-strip mt-4">
+          {% for category in category_highlights %}
+            <a class="category-chip" href="/?q={{ category.name }}">
+              <span>{{ category.name }}</span>
+              <small>{{ category.count }} event{% if category.count != 1 %}s{% endif %}</small>
+            </a>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="row g-4">
+      {% for event in events %}
+        <div class="col-lg-4 col-md-6">
+          <article class="event-card h-100">
+            <div
+              class="event-visual"
+              style="background-image: {% if event.image_url %}linear-gradient(180deg, rgba(17, 21, 29, 0.05), rgba(17, 21, 29, 0.75)), url('{{ event.image_url }}'){% else %}linear-gradient(140deg, rgba(233, 100, 51, 0.88), rgba(30, 87, 76, 0.86)){% endif %};"
+            >
+              <span class="badge rounded-pill text-bg-light">{{ event.category }}</span>
+              <span class="badge rounded-pill status-pill">{{ event.status_label }}</span>
+            </div>
+            <div class="p-4">
+              <h3 class="h4 mb-2">{{ event.title }}</h3>
+              <p class="text-secondary mb-3">{{ event.venue }}, {{ event.city }}</p>
+              <div class="d-flex justify-content-between small text-secondary mb-3">
+                <span>{{ event.event_date | datetime }}</span>
+                <span>{{ event.ticket_price | money }}</span>
+              </div>
+              <p class="mb-3">{{ event.description[:120] }}{% if event.description|length > 120 %}...{% endif %}</p>
+              <div class="progress metric-progress mb-2" role="progressbar" aria-label="Capacity">
+                <div class="progress-bar" style="width: {{ event.fill_rate }}%"></div>
+              </div>
+              <div class="d-flex justify-content-between small text-secondary mb-4">
+                <span>{{ event.sold_tickets }} sold</span>
+                <span>{{ event.remaining_capacity }} left</span>
+              </div>
+              <div class="d-flex gap-2">
+                <a class="btn btn-primary rounded-pill px-4" href="/events/{{ event.id }}">View details</a>
+                {% if event.can_manage %}
+                  <a class="btn btn-outline-dark rounded-pill px-4" href="/organizer/events/{{ event.id }}/edit">Manage</a>
+                {% endif %}
+              </div>
+            </div>
+          </article>
+        </div>
+      {% else %}
+        <div class="col-12">
+          <div class="panel-card p-5 text-center">
+            <h3 class="h4">{% if query %}No events matched your search.{% else %}No events published yet.{% endif %}</h3>
+            <p class="text-secondary mb-4">
+              {% if query %}
+                Try another keyword or clear the search to browse everything.
+              {% else %}
+                The catalog will appear here as soon as organizers start publishing.
+              {% endif %}
+            </p>
+            {% if current_user and current_user.role in ['organizer', 'admin'] %}
+              <a class="btn btn-primary rounded-pill px-4" href="/organizer/events/new">Create the first event</a>
+            {% else %}
+              <a class="btn btn-outline-dark rounded-pill px-4" href="/auth/register">Create an account</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}

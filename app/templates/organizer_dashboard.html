@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="container py-5">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4">
+      <div>
+        <span class="eyebrow">Organizer workspace</span>
+        <h1 class="section-heading mt-2">Operational overview</h1>
+        <p class="text-secondary mb-0">Manage your catalog, monitor sell-through, and keep the door flow moving.</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-primary rounded-pill px-4" href="/organizer/events/new">New event</a>
+        <a class="btn btn-outline-dark rounded-pill px-4" href="/organizer/check-in">Open check-in</a>
+      </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Active catalog</div>
+          <div class="metric-value">{{ stats.total_events }}</div>
+          <div class="metric-note">{{ stats.upcoming_events }} upcoming events</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Paid tickets</div>
+          <div class="metric-value">{{ stats.tickets_sold }}</div>
+          <div class="metric-note">{{ stats.checked_in }} already checked in</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Revenue snapshot</div>
+          <div class="metric-value">{{ stats.revenue | money }}</div>
+          <div class="metric-note">{{ stats.sell_through }}% of published capacity has been sold</div>
+        </div>
+      </div>
+      <div class="col-lg-3 col-md-6">
+        <div class="panel-card p-4 h-100">
+          <div class="metric-label">Check-in queue</div>
+          <div class="metric-value">{{ stats.pending_arrivals }}</div>
+          <div class="metric-note">{{ stats.checked_in }} attendees have already entered</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-8">
+        <div class="panel-card p-4 h-100">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="section-title mb-0">Event management</h2>
+            <a class="text-link" href="/reports">Open full reports</a>
+          </div>
+          <div class="table-responsive">
+            <table class="table align-middle table-borderless dashboard-table mb-0">
+              <thead>
+                <tr>
+                  <th>Event</th>
+                  <th>Status</th>
+                  <th>Date</th>
+                  <th>Capacity</th>
+                  <th>Check-in</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for event in events %}
+                  <tr>
+                    <td>
+                      <strong>{{ event.title }}</strong>
+                      <div class="small text-secondary">{{ event.category }} • {{ event.city }}</div>
+                    </td>
+                    <td><span class="badge rounded-pill {{ event.status_variant }}">{{ event.status_label }}</span></td>
+                    <td>{{ event.event_date | datetime }}</td>
+                    <td>
+                      <div>{{ event.sold_tickets }}/{{ event.capacity }}</div>
+                      <div class="small text-secondary">{{ event.fill_rate }}% filled</div>
+                    </td>
+                    <td>
+                      <div>{{ event.checked_in_tickets }}/{{ event.sold_tickets }}</div>
+                      <div class="small text-secondary">{{ event.attendance_rate }}% attendance</div>
+                    </td>
+                    <td class="text-end">
+                      <div class="d-flex flex-wrap justify-content-end gap-2">
+                        <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/events/{{ event.id }}">View</a>
+                        <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/organizer/events/{{ event.id }}/edit">Edit</a>
+                        <form method="post" action="/organizer/events/{{ event.id }}/delete" onsubmit="return confirm('Delete this event?');">
+                          <button class="btn btn-sm btn-outline-danger rounded-pill px-3" type="submit">Delete</button>
+                        </form>
+                      </div>
+                    </td>
+                  </tr>
+                {% else %}
+                  <tr>
+                    <td colspan="6" class="text-center text-secondary py-5">No events yet. Publish your first one and the dashboard will start filling in.</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4">
+        <div class="d-grid gap-4">
+          <div class="panel-card p-4">
+            <h2 class="section-title mb-3">Top performer</h2>
+            {% if top_event %}
+              <div class="mini-ticket">
+                <strong>{{ top_event.title }}</strong>
+                <div class="small text-secondary mt-1">{{ top_event.sold_tickets }} sold • {{ top_event.fill_rate }}% filled</div>
+                <div class="small text-secondary mt-2">{{ top_event.event_date | datetime }} • {{ top_event.city }}</div>
+              </div>
+            {% else %}
+              <p class="text-secondary mb-0">Create your first event to see performance highlights.</p>
+            {% endif %}
+          </div>
+
+          <div class="panel-card p-4">
+            <h2 class="section-title mb-3">Operational watchlist</h2>
+            <div class="d-grid gap-3">
+              {% for event in attention_events %}
+                <div class="mini-ticket">
+                  <div class="d-flex justify-content-between align-items-start gap-3">
+                    <div>
+                      <strong>{{ event.title }}</strong>
+                      <div class="small text-secondary">{{ event.remaining_capacity }} seats left</div>
+                    </div>
+                    <span class="badge rounded-pill {{ event.status_variant }}">{{ event.status_label }}</span>
+                  </div>
+                  <div class="small text-secondary mt-2">{{ event.fill_rate }}% filled • {{ event.event_date | datetime }}</div>
+                </div>
+              {% else %}
+                <p class="text-secondary mb-0">Your next event priorities will appear here automatically.</p>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="panel-card p-4">
+            <h2 class="section-title mb-3">Latest bookings</h2>
+            <div class="d-grid gap-3">
+              {% for ticket in recent_tickets %}
+                <div class="mini-ticket">
+                  <div class="d-flex justify-content-between align-items-start gap-3">
+                    <div>
+                      <strong>{{ ticket.purchaser_name }}</strong>
+                      <div class="small text-secondary">{{ ticket.event.title }}</div>
+                    </div>
+                    <span class="badge rounded-pill text-bg-light">{{ ticket.quantity }} seat{% if ticket.quantity > 1 %}s{% endif %}</span>
+                  </div>
+                  <div class="small text-secondary mt-2">{{ ticket.ticket_code }} • {{ ticket.created_at | datetime }}</div>
+                </div>
+              {% else %}
+                <p class="text-secondary mb-0">The latest confirmed bookings will appear here.</p>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}
