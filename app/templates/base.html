@@ -6,7 +6,7 @@
     <title>{{ page_title }} | EventSphere</title>
     <meta
       name="description"
-      content="EventSphere helps organizers launch events, sell tickets online, validate entry with QR codes, and track performance in one place."
+      content="EventSphere is a web application for event publishing, online ticket booking, QR check-in, and basic reporting."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -26,7 +26,7 @@
         <div class="container">
           <a class="navbar-brand brand-mark" href="/">
             <span>EventSphere</span>
-            <small>Event operations, ticketing, and entry control</small>
+            <small>Event booking and QR check-in</small>
           </a>
           <button
             class="navbar-toggler"
@@ -93,6 +93,31 @@
         </div>
       </nav>
 
+      {% if current_user %}
+        <section class="account-strip">
+          <div class="container account-strip-inner">
+            <div class="account-strip-copy">
+              Signed in as <strong>{{ current_user.full_name }}</strong>
+            </div>
+            <div class="account-strip-actions">
+              <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/">Events</a>
+              {% if current_user.role == 'admin' %}
+                <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/admin">Admin</a>
+                <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/reports">Reports</a>
+              {% elif current_user.role == 'organizer' %}
+                <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/organizer">Organizer</a>
+                <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/organizer/events/new">Create event</a>
+              {% else %}
+                <a class="btn btn-sm btn-outline-dark rounded-pill px-3" href="/my-tickets">My tickets</a>
+              {% endif %}
+              <form method="post" action="/auth/logout" class="m-0">
+                <button class="btn btn-sm btn-dark rounded-pill px-3" type="submit">Sign out</button>
+              </form>
+            </div>
+          </div>
+        </section>
+      {% endif %}
+
       <main class="pb-5">
         {% if flash_messages %}
           <section class="container pt-4">
@@ -110,17 +135,17 @@
             <div class="col-lg-5">
               <div class="brand-mark footer-brand">
                 <span>EventSphere</span>
-                <small>Run the full event journey from launch to check-in.</small>
+                <small>Event booking and check-in system</small>
               </div>
               <p class="footer-copy mt-3 mb-0">
-                Create events, manage capacity, confirm bookings, validate guests at the door, and keep performance numbers close.
+                Create events, book tickets, and confirm entry with QR codes.
               </p>
             </div>
             <div class="col-lg-2 col-md-4">
               <div class="footer-title">Explore</div>
               <a class="footer-link" href="/">Events</a>
               {% if current_user %}
-                <a class="footer-link" href="/my-tickets">My tickets</a>
+                <a class="footer-link" href="/dashboard">Dashboard</a>
               {% else %}
                 <a class="footer-link" href="/auth/register">Create account</a>
               {% endif %}
@@ -130,6 +155,9 @@
               {% if current_user and current_user.role in ['organizer', 'admin'] %}
                 <a class="footer-link" href="/organizer">Dashboard</a>
                 <a class="footer-link" href="/organizer/check-in">Check-in</a>
+              {% elif current_user %}
+                <a class="footer-link" href="/my-tickets">My tickets</a>
+                <a class="footer-link" href="/">Browse events</a>
               {% else %}
                 <a class="footer-link" href="/auth/login">Sign in</a>
                 <a class="footer-link" href="/auth/register">Register</a>
@@ -140,16 +168,18 @@
               {% if current_user and current_user.role == 'admin' %}
                 <a class="footer-link" href="/admin">Admin workspace</a>
               {% elif current_user and current_user.role == 'organizer' %}
-                <a class="footer-link" href="/organizer/events/new">Publish a new event</a>
+                <a class="footer-link" href="/organizer/events/new">Create event</a>
+              {% elif current_user %}
+                <a class="footer-link" href="/dashboard">Open dashboard</a>
               {% else %}
-                <a class="footer-link" href="/auth/register">Join as user or organizer</a>
+                <a class="footer-link" href="/auth/register">Create account</a>
               {% endif %}
-              <div class="footer-note mt-2">Built for teams, clubs, communities, and growing organizers.</div>
+              <div class="footer-note mt-2">Student project demo for event management.</div>
             </div>
           </div>
           <div class="footer-bottom mt-4 pt-4">
             <span>&copy; {{ current_year }} EventSphere</span>
-            <span>Smarter event operations.</span>
+            <span>Online ticket booking and entry control.</span>
           </div>
         </div>
       </footer>

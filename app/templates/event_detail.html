@@ -67,7 +67,7 @@
         <div class="panel-card p-4 p-lg-5">
           <span class="eyebrow">Ticket booking</span>
           <h2 class="section-title mt-2">Reserve your spot</h2>
-          <p class="text-secondary">Attendees receive an instant confirmation with a digital ticket code and QR-based validation link.</p>
+          <p class="text-secondary">Choose the number of tickets and a payment method. After booking, the ticket appears in My tickets.</p>
 
           {% if booking_errors %}
             <div class="alert alert-danger rounded-4">
@@ -86,7 +86,7 @@
           {% elif not current_user %}
             <div class="auth-cta-card">
               <h3 class="h4 mb-2">Sign in to book</h3>
-              <p class="text-secondary mb-3">Create an account or sign in to reserve tickets and access your digital pass later.</p>
+              <p class="text-secondary mb-3">Create an account or sign in to reserve tickets and view them later.</p>
               <div class="d-flex flex-wrap gap-2">
                 <a class="btn btn-primary rounded-pill px-4" href="/auth/login?next=/events/{{ event.id }}">Sign in</a>
                 <a class="btn btn-outline-dark rounded-pill px-4" href="/auth/register?next=/events/{{ event.id }}">Create account</a>
@@ -116,12 +116,23 @@
                   </select>
                 </div>
               </div>
+              <div class="mt-3">
+                <label class="form-label">Payment reference</label>
+                <input
+                  class="form-control form-control-lg rounded-4"
+                  type="text"
+                  name="payer_reference"
+                  value="{{ booking_form.payer_reference }}"
+                  placeholder="Phone suffix, card last 4 digits, or sandbox buyer reference"
+                  required
+                />
+              </div>
               <div class="panel-subtle rounded-4 p-3 mt-4 mb-4">
                 <div class="d-flex justify-content-between">
                   <span>Ticket price</span>
                   <strong>{{ event.ticket_price | money }}</strong>
                 </div>
-                <div class="small text-secondary mt-2">Your ticket will appear in My tickets right after checkout.</div>
+                <div class="small text-secondary mt-2">After confirmation, the system saves a verified sandbox payment and issues the ticket immediately.</div>
               </div>
               <button class="btn btn-primary btn-lg rounded-pill w-100" type="submit">Confirm booking</button>
             </form>

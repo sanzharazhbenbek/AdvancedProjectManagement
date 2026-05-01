@@ -19,6 +19,7 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
     timezone_label: str = os.getenv("TIMEZONE_LABEL", "Asia/Almaty")
     session_secret: str = os.getenv("SESSION_SECRET", "eventsphere-session-secret")
+    public_app_url: str = os.getenv("PUBLIC_APP_URL", "https://eventsphere.streamlit.app").rstrip("/")
     admin_emails: tuple[str, ...] = parse_csv(os.getenv("ADMIN_EMAILS", ""))
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8000"))

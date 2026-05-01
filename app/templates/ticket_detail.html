@@ -38,6 +38,14 @@
                   <strong>{{ ticket.payment_status }} via {{ ticket.payment_method }}</strong>
                 </div>
                 <div class="ticket-info-block">
+                  <span>Payment reference</span>
+                  <strong>{{ ticket.payment_reference }}</strong>
+                </div>
+                <div class="ticket-info-block">
+                  <span>Payment verified</span>
+                  <strong>{{ ticket.payment_verified_at | datetime if ticket.payment_verified_at else "Pending" }}</strong>
+                </div>
+                <div class="ticket-info-block">
                   <span>Entry guidance</span>
                   <strong>Present this ticket at arrival for QR validation.</strong>
                 </div>

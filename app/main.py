@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import qrcode
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -22,7 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import settings
 from .database import Base, build_engine, build_session_factory
-from .models import Event, Ticket, User
+from .models import Event, PaymentRecord, Ticket, User
 from .security import hash_password, normalize_email, verify_password
 from .seed import seed_default_users
 
@@ -56,6 +56,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         migrate_existing_schema(engine)
         with SessionLocal() as session:
             seed_default_users(session)
+            sync_ticket_records(session)
         yield
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -189,7 +190,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         db.refresh(user)
 
         request.session["user_id"] = user.id
-        flash(request, "success", f"Welcome to EventSphere, {user.full_name}.")
+        flash(request, "success", "Account created.")
         return redirect_response(next_url or resolve_dashboard_path(user))
 
     @app.get("/auth/login", response_class=HTMLResponse)
@@ -244,13 +245,13 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
         request.session.clear()
         request.session["user_id"] = user.id
-        flash(request, "success", f"Welcome back, {user.full_name}.")
+        flash(request, "success", "Signed in.")
         return redirect_response(next_url or resolve_dashboard_path(user))
 
     @app.post("/auth/logout")
     def logout(request: Request) -> RedirectResponse:
         request.session.clear()
-        flash(request, "success", "You have been signed out.")
+        flash(request, "success", "Signed out.")
         return redirect_response("/")
 
     @app.get("/my-tickets", response_class=HTMLResponse)
@@ -355,7 +356,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         target.role = role
         db.add(target)
         db.commit()
-        flash(request, "success", f"{target.full_name} is now assigned as {ROLE_LABELS[role]}.")
+        flash(request, "success", "Role updated.")
         return redirect_response("/admin")
 
     @app.post("/admin/users/{user_id}/status")
@@ -381,7 +382,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         db.add(target)
         db.commit()
         status_label = "active" if target.is_active else "inactive"
-        flash(request, "success", f"{target.full_name} is now {status_label}.")
+        flash(request, "success", f"Account {status_label}.")
         return redirect_response("/admin")
 
     @app.get("/organizer", response_class=HTMLResponse)
@@ -461,7 +462,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         db.add(event)
         db.commit()
         db.refresh(event)
-        flash(request, "success", "Event created successfully.")
+        flash(request, "success", "Event created.")
         return redirect_response(f"/events/{event.id}")
 
     @app.get("/organizer/events/{event_id}/edit", response_class=HTMLResponse)
@@ -524,7 +525,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
         db.add(event)
         db.commit()
-        flash(request, "success", "Event updated successfully.")
+        flash(request, "success", "Event updated.")
         return redirect_response(f"/events/{event.id}")
 
     @app.post("/organizer/events/{event_id}/delete")
@@ -540,7 +541,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
         db.delete(event)
         db.commit()
-        flash(request, "success", "Event deleted successfully.")
+        flash(request, "success", "Event deleted.")
         return redirect_response("/organizer")
 
     @app.get("/events/{event_id}", response_class=HTMLResponse)
@@ -599,21 +600,17 @@ def create_app(database_url: str | None = None) -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        ticket = Ticket(
-            event_id=event.id,
-            purchaser_id=current_user.id,
-            purchaser_name=current_user.full_name,
-            purchaser_email=current_user.email,
+        ticket = create_confirmed_ticket(
+            db=db,
+            event=event,
+            purchaser=current_user,
             quantity=booking_form["quantity"],
-            total_amount=event.ticket_price * booking_form["quantity"],
             payment_method=booking_form["payment_method"],
-            payment_status="Confirmed",
-            ticket_code=generate_ticket_code(db),
+            payer_reference=booking_form["payer_reference"],
+            confirmation_note="Sandbox payment confirmed from the website checkout.",
         )
-        db.add(ticket)
-        db.commit()
 
-        flash(request, "success", "Booking confirmed. Your digital ticket is ready.")
+        flash(request, "success", "Booking confirmed. The ticket is now in My tickets.")
         return redirect_response(f"/tickets/{ticket.ticket_code}")
 
     @app.get("/tickets/{ticket_code}", response_class=HTMLResponse)
@@ -623,11 +620,10 @@ def create_app(database_url: str | None = None) -> FastAPI:
             return auth_result
 
         ticket = get_ticket_or_404(db, ticket_code)
+        prepare_ticket_record(ticket)
         if not can_view_ticket(auth_result, ticket):
             flash(request, "danger", "You do not have permission to view this ticket.")
             return redirect_response("/my-tickets")
-
-        validation_url = f"{request.url_for('check_in_page')}?code={ticket.ticket_code}"
 
         return render_template(
             request,
@@ -635,8 +631,8 @@ def create_app(database_url: str | None = None) -> FastAPI:
             {
                 "page_title": f"Ticket {ticket.ticket_code}",
                 "ticket": ticket,
-                "validation_url": validation_url,
-                "qr_svg_data_uri": generate_qr_svg_data_uri(validation_url),
+                "validation_url": ticket.validation_url,
+                "qr_svg_data_uri": ticket.qr_svg_data_uri,
                 "can_validate_ticket": can_validate_ticket(auth_result, ticket),
                 "current_user": auth_result,
             },
@@ -651,8 +647,11 @@ def create_app(database_url: str | None = None) -> FastAPI:
         ticket = None
         message: tuple[str, str] | None = None
         if code:
-            candidate = get_ticket_or_none(db, code.strip().upper())
+            lookup = parse_ticket_lookup(code)
+            normalized_code = lookup["ticket_code"]
+            candidate = get_ticket_or_none(db, normalized_code) if normalized_code else None
             if candidate and can_validate_ticket(auth_result, candidate):
+                prepare_ticket_record(candidate)
                 ticket = candidate
             elif candidate:
                 message = ("danger", "You do not have permission to validate this ticket.")
@@ -680,7 +679,10 @@ def create_app(database_url: str | None = None) -> FastAPI:
             return auth_result
 
         form = await request.form()
-        code = str(form.get("code", "")).strip().upper()
+        raw_code = str(form.get("code", "")).strip()
+        lookup = parse_ticket_lookup(raw_code)
+        code = lookup["ticket_code"] or ""
+        payment_reference = lookup["payment_reference"]
         action = str(form.get("action", "lookup")).strip()
         ticket = get_ticket_or_none(db, code) if code else None
         message: tuple[str, str] | None = None
@@ -689,20 +691,31 @@ def create_app(database_url: str | None = None) -> FastAPI:
             message = ("danger", "Enter a valid ticket code.")
         elif ticket is None:
             message = ("danger", "Ticket not found.")
+        elif payment_reference and ticket.payment_reference != payment_reference:
+            ticket = None
+            message = ("danger", "The payment reference in this QR code does not match the stored ticket.")
         elif not can_validate_ticket(auth_result, ticket):
             ticket = None
             message = ("danger", "You do not have permission to validate this ticket.")
         elif action == "confirm":
-            if ticket.checked_in_at is not None:
+            if ticket.payment_status != "Confirmed":
+                message = ("danger", "Payment has not been confirmed for this ticket.")
+            elif ticket.ticket_status == "Cancelled":
+                message = ("danger", "This ticket is cancelled and cannot be checked in.")
+            elif ticket.checked_in_at is not None:
                 message = ("warning", "This ticket was already checked in earlier.")
             else:
                 ticket.checked_in_at = datetime.now()
+                ticket.ticket_status = "Checked in"
                 db.add(ticket)
                 db.commit()
                 db.refresh(ticket)
-                message = ("success", "Check-in completed successfully.")
+                message = ("success", "Check-in completed.")
         else:
             message = ("info", "Ticket loaded. Review the details and confirm check-in.")
+
+        if ticket is not None:
+            prepare_ticket_record(ticket)
 
         organizer_scope_id = None if auth_result.role == "admin" else auth_result.id
         return render_template(
@@ -781,6 +794,35 @@ def migrate_existing_schema(engine) -> None:
             ticket_columns = {column["name"] for column in inspector.get_columns("tickets")}
             if "purchaser_id" not in ticket_columns:
                 connection.exec_driver_sql("ALTER TABLE tickets ADD COLUMN purchaser_id INTEGER")
+            if "payment_reference" not in ticket_columns:
+                connection.exec_driver_sql("ALTER TABLE tickets ADD COLUMN payment_reference VARCHAR(40)")
+            if "payment_verified_at" not in ticket_columns:
+                connection.exec_driver_sql("ALTER TABLE tickets ADD COLUMN payment_verified_at DATETIME")
+            if "ticket_status" not in ticket_columns:
+                connection.exec_driver_sql("ALTER TABLE tickets ADD COLUMN ticket_status VARCHAR(30)")
+
+            connection.exec_driver_sql(
+                "UPDATE tickets SET payment_status = 'Confirmed' WHERE payment_status IS NULL OR payment_status = '' OR payment_status = 'Paid'"
+            )
+            connection.exec_driver_sql(
+                "UPDATE tickets SET payment_reference = ticket_code WHERE payment_reference IS NULL OR payment_reference = ''"
+            )
+            connection.exec_driver_sql(
+                "UPDATE tickets SET payment_verified_at = created_at WHERE payment_verified_at IS NULL AND payment_status = 'Confirmed'"
+            )
+            connection.exec_driver_sql(
+                """
+                UPDATE tickets
+                SET ticket_status = CASE
+                    WHEN checked_in_at IS NOT NULL THEN 'Checked in'
+                    ELSE 'Active'
+                END
+                WHERE ticket_status IS NULL OR ticket_status = ''
+                """
+            )
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_tickets_payment_reference ON tickets (payment_reference)"
+            )
 
 
 def render_template(
@@ -872,6 +914,177 @@ def can_view_ticket(user: User, ticket: Ticket) -> bool:
     return user.role == "admin" or ticket.event.organizer_id == user.id or ticket.purchaser_id == user.id
 
 
+def countable_ticket_filter():
+    return Ticket.payment_status == "Confirmed", Ticket.ticket_status.in_(("Active", "Checked in"))
+
+
+def resolve_ticket_status(ticket: Ticket) -> str:
+    if ticket.checked_in_at is not None:
+        return "Checked in"
+    if ticket.ticket_status:
+        return ticket.ticket_status
+    if ticket.payment_status != "Confirmed":
+        return "Payment pending"
+    return "Active"
+
+
+def mask_payment_identifier(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        return "Verified by sandbox gateway"
+
+    visible = trimmed[-4:] if len(trimmed) >= 4 else trimmed
+    return f"**** {visible}"
+
+
+def generate_payment_reference(db: Session) -> str:
+    while True:
+        payment_reference = f"PAY-{secrets.token_hex(4).upper()}"
+        if db.scalar(select(Ticket.id).where(Ticket.payment_reference == payment_reference)) is None:
+            return payment_reference
+
+
+def create_confirmed_ticket(
+    db: Session,
+    event: Event,
+    purchaser: User,
+    quantity: int,
+    payment_method: str,
+    payer_reference: str,
+    confirmation_note: str = "Sandbox payment confirmed.",
+) -> Ticket:
+    payment_reference = generate_payment_reference(db)
+    verified_at = datetime.now()
+    ticket = Ticket(
+        event_id=event.id,
+        purchaser_id=purchaser.id,
+        purchaser_name=purchaser.full_name,
+        purchaser_email=purchaser.email,
+        quantity=quantity,
+        total_amount=event.ticket_price * quantity,
+        payment_method=payment_method,
+        payment_status="Confirmed",
+        payment_reference=payment_reference,
+        payment_verified_at=verified_at,
+        ticket_code=generate_ticket_code(db),
+        ticket_status="Active",
+    )
+    payment = PaymentRecord(
+        transaction_reference=payment_reference,
+        provider_name=payment_method,
+        status="Confirmed",
+        amount=ticket.total_amount,
+        currency="KZT",
+        payer_identifier=mask_payment_identifier(payer_reference),
+        confirmation_note=confirmation_note,
+        verified_at=verified_at,
+    )
+    ticket.payments.append(payment)
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def sync_ticket_records(session: Session) -> None:
+    tickets = session.scalars(
+        select(Ticket).options(selectinload(Ticket.payments)).order_by(Ticket.id.asc())
+    ).all()
+    changed = False
+
+    for ticket in tickets:
+        if ticket.payment_status in {"", "Paid"}:
+            ticket.payment_status = "Confirmed"
+            changed = True
+        if not ticket.payment_reference:
+            ticket.payment_reference = ticket.ticket_code
+            changed = True
+        if ticket.payment_status == "Confirmed" and ticket.payment_verified_at is None:
+            ticket.payment_verified_at = ticket.created_at
+            changed = True
+        status = resolve_ticket_status(ticket)
+        if ticket.ticket_status != status:
+            ticket.ticket_status = status
+            changed = True
+        if not ticket.payments:
+            ticket.payments.append(
+                PaymentRecord(
+                    transaction_reference=ticket.payment_reference,
+                    provider_name=ticket.payment_method,
+                    status=ticket.payment_status,
+                    amount=ticket.total_amount,
+                    currency="KZT",
+                    payer_identifier=mask_payment_identifier(ticket.purchaser_email),
+                    confirmation_note="Backfilled from an existing ticket record.",
+                    verified_at=ticket.payment_verified_at or ticket.created_at,
+                )
+            )
+            changed = True
+
+    if changed:
+        session.commit()
+
+
+def build_ticket_validation_url(ticket: Ticket) -> str:
+    base_url = settings.public_app_url or "http://127.0.0.1:8501"
+    return f"{base_url}/?ticket={quote(ticket.ticket_code)}&payment={quote(ticket.payment_reference)}"
+
+
+def build_ticket_qr_value(ticket: Ticket) -> str:
+    return build_ticket_validation_url(ticket)
+
+
+def parse_ticket_lookup(raw_value: str | None) -> dict[str, str | None]:
+    raw = (raw_value or "").strip()
+    if not raw:
+        return {"ticket_code": None, "payment_reference": None}
+
+    upper_raw = raw.upper()
+    if upper_raw.startswith("HTTP://") or upper_raw.startswith("HTTPS://"):
+        parsed = urlparse(raw)
+        query = parse_qs(parsed.query)
+        ticket_code = query.get("ticket", [None])[0] or query.get("code", [None])[0]
+        payment_reference = query.get("payment", [None])[0]
+        if ticket_code:
+            return {
+                "ticket_code": ticket_code.strip().upper(),
+                "payment_reference": payment_reference.strip().upper() if payment_reference else None,
+            }
+
+    if "TICKET=" in upper_raw:
+        parts = upper_raw.split("&")
+        ticket_code = None
+        payment_reference = None
+        for part in parts:
+            if "TICKET=" in part:
+                ticket_code = part.split("TICKET=", 1)[1]
+            if "PAYMENT=" in part:
+                payment_reference = part.split("PAYMENT=", 1)[1]
+        return {
+            "ticket_code": ticket_code.strip().upper() if ticket_code else None,
+            "payment_reference": payment_reference.strip().upper() if payment_reference else None,
+        }
+
+    if "EVT-" in upper_raw:
+        start = upper_raw.index("EVT-")
+        candidate = upper_raw[start:].split()[0].split("&")[0].split("?")[0].rstrip(".,);]")
+        return {"ticket_code": candidate, "payment_reference": None}
+
+    return {"ticket_code": upper_raw, "payment_reference": None}
+
+
+def prepare_ticket_record(ticket: Ticket) -> Ticket:
+    ticket.ticket_status = resolve_ticket_status(ticket)
+    ticket.is_paid = ticket.payment_status == "Confirmed"
+    ticket.is_checked_in = ticket.checked_in_at is not None
+    ticket.validation_url = build_ticket_validation_url(ticket)
+    ticket.qr_value = build_ticket_qr_value(ticket)
+    ticket.qr_svg_data_uri = generate_qr_svg_data_uri(ticket.qr_value)
+    ticket.display_payment_reference = ticket.payment_reference
+    ticket.display_payment_verified_at = ticket.payment_verified_at
+    return ticket
+
+
 def get_event_or_404(db: Session, event_id: int) -> Event:
     event = db.get(Event, event_id)
     if event is None:
@@ -884,7 +1097,7 @@ def get_ticket_or_none(db: Session, ticket_code: str | None) -> Ticket | None:
         return None
     stmt = (
         select(Ticket)
-        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser))
+        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser), selectinload(Ticket.payments))
         .where(Ticket.ticket_code == ticket_code)
     )
     return db.scalar(stmt)
@@ -907,7 +1120,7 @@ def get_visible_events(db: Session, organizer_scope_id: int | None = None) -> li
 def get_recent_tickets_for_scope(db: Session, organizer_scope_id: int | None = None) -> list[Ticket]:
     stmt = (
         select(Ticket)
-        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser))
+        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser), selectinload(Ticket.payments))
         .order_by(Ticket.created_at.desc())
         .limit(6)
     )
@@ -918,7 +1131,9 @@ def get_recent_tickets_for_scope(db: Session, organizer_scope_id: int | None = N
 
 def get_sold_ticket_map(db: Session) -> dict[int, int]:
     rows = db.execute(
-        select(Ticket.event_id, func.coalesce(func.sum(Ticket.quantity), 0)).group_by(Ticket.event_id)
+        select(Ticket.event_id, func.coalesce(func.sum(Ticket.quantity), 0))
+        .where(*countable_ticket_filter())
+        .group_by(Ticket.event_id)
     ).all()
     return {event_id: int(quantity or 0) for event_id, quantity in rows}
 
@@ -931,20 +1146,25 @@ def get_checked_in_ticket_map(db: Session) -> dict[int, int]:
                 func.sum(case((Ticket.checked_in_at.is_not(None), Ticket.quantity), else_=0)),
                 0,
             ),
-        ).group_by(Ticket.event_id)
+        )
+        .where(*countable_ticket_filter())
+        .group_by(Ticket.event_id)
     ).all()
     return {event_id: int(quantity or 0) for event_id, quantity in rows}
 
 
 def get_sold_quantity_for_event(db: Session, event_id: int) -> int:
-    value = db.scalar(select(func.coalesce(func.sum(Ticket.quantity), 0)).where(Ticket.event_id == event_id))
+    value = db.scalar(
+        select(func.coalesce(func.sum(Ticket.quantity), 0)).where(Ticket.event_id == event_id, *countable_ticket_filter())
+    )
     return int(value or 0)
 
 
 def get_checked_in_quantity_for_event(db: Session, event_id: int) -> int:
     value = db.scalar(
         select(func.coalesce(func.sum(case((Ticket.checked_in_at.is_not(None), Ticket.quantity), else_=0)), 0)).where(
-            Ticket.event_id == event_id
+            Ticket.event_id == event_id,
+            *countable_ticket_filter(),
         )
     )
     return int(value or 0)
@@ -963,10 +1183,17 @@ def build_system_stats(db: Session, organizer_scope_id: int | None = None) -> di
         event_stmt = event_stmt.where(Event.organizer_id == organizer_scope_id)
     total_events, total_capacity, upcoming, running = db.execute(event_stmt).one()
 
+    confirmed_quantity = case((Ticket.payment_status == "Confirmed", Ticket.quantity), else_=0)
+    confirmed_revenue = case((Ticket.payment_status == "Confirmed", Ticket.total_amount), else_=0.0)
+    checked_in_quantity = case(
+        ((Ticket.payment_status == "Confirmed") & Ticket.checked_in_at.is_not(None), Ticket.quantity),
+        else_=0,
+    )
+
     ticket_stmt = select(
-        func.coalesce(func.sum(Ticket.quantity), 0),
-        func.coalesce(func.sum(Ticket.total_amount), 0.0),
-        func.coalesce(func.sum(case((Ticket.checked_in_at.is_not(None), Ticket.quantity), else_=0)), 0),
+        func.coalesce(func.sum(confirmed_quantity), 0),
+        func.coalesce(func.sum(confirmed_revenue), 0.0),
+        func.coalesce(func.sum(checked_in_quantity), 0),
     ).select_from(Ticket).join(Event, Ticket.event_id == Event.id)
     if organizer_scope_id is not None:
         ticket_stmt = ticket_stmt.where(Event.organizer_id == organizer_scope_id)
@@ -992,20 +1219,18 @@ def build_system_stats(db: Session, organizer_scope_id: int | None = None) -> di
 
 
 def build_report_statement(organizer_scope_id: int | None = None):
+    confirmed_quantity = case((Ticket.payment_status == "Confirmed", Ticket.quantity), else_=0)
+    confirmed_revenue = case((Ticket.payment_status == "Confirmed", Ticket.total_amount), else_=0.0)
+    checked_in_quantity = case(
+        ((Ticket.payment_status == "Confirmed") & Ticket.checked_in_at.is_not(None), Ticket.quantity),
+        else_=0,
+    )
     stmt = (
         select(
             Event,
-            func.coalesce(func.sum(Ticket.quantity), 0).label("tickets_sold"),
-            func.coalesce(
-                func.sum(
-                    case(
-                        (Ticket.checked_in_at.is_not(None), Ticket.quantity),
-                        else_=0,
-                    )
-                ),
-                0,
-            ).label("checked_in"),
-            func.coalesce(func.sum(Ticket.total_amount), 0.0).label("revenue"),
+            func.coalesce(func.sum(confirmed_quantity), 0).label("tickets_sold"),
+            func.coalesce(func.sum(checked_in_quantity), 0).label("checked_in"),
+            func.coalesce(func.sum(confirmed_revenue), 0.0).label("revenue"),
         )
         .outerjoin(Ticket, Ticket.event_id == Event.id)
         .group_by(Event.id)
@@ -1135,16 +1360,20 @@ def default_booking_form_data(current_user: User | None = None) -> dict[str, Any
         "purchaser_email": current_user.email if current_user else "",
         "quantity": 1,
         "payment_method": "Kaspi Pay",
+        "payer_reference": "",
     }
 
 
 def validate_booking_form(form, current_user: User) -> tuple[dict[str, Any], list[str]]:
     payment_method = str(form.get("payment_method", "")).strip()
     quantity_raw = str(form.get("quantity", "1")).strip()
+    payer_reference = str(form.get("payer_reference", "")).strip()
     errors = []
 
     if not payment_method:
         errors.append("Select a payment method.")
+    if len(payer_reference) < 4:
+        errors.append("Enter a short payment reference such as phone suffix or last 4 digits.")
 
     quantity = 1
     try:
@@ -1159,6 +1388,7 @@ def validate_booking_form(form, current_user: User) -> tuple[dict[str, Any], lis
         "purchaser_email": current_user.email,
         "quantity": quantity,
         "payment_method": payment_method,
+        "payer_reference": payer_reference,
     }, errors
 
 

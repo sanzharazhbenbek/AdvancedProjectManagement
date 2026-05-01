@@ -5,10 +5,10 @@
     <div class="container">
       <div class="row align-items-center gy-4">
         <div class="col-lg-7">
-          <span class="eyebrow">Event management platform</span>
-          <h1 class="display-4 hero-title mt-3">Sell tickets, manage guests, and run smoother event days.</h1>
+          <span class="eyebrow">Online event booking</span>
+          <h1 class="display-4 hero-title mt-3">Find events, book tickets, and manage entry in one place.</h1>
           <p class="hero-copy mt-3">
-            EventSphere gives organizers one workspace for publishing events, tracking capacity, confirming purchases, and validating entry with digital tickets.
+            EventSphere lets visitors book tickets online and gives organizers simple tools for publishing events, checking attendance, and viewing reports.
           </p>
           <div class="d-flex flex-wrap gap-3 mt-4">
             {% if current_user %}
@@ -28,7 +28,7 @@
         <div class="col-lg-5">
           <div class="hero-panel panel-card p-4 p-lg-5">
             <div class="hero-panel-header">
-              <span class="panel-tag">Platform snapshot</span>
+              <span class="panel-tag">Current overview</span>
               {% if current_user and current_user.role in ['organizer', 'admin'] %}
                 <a class="text-link small" href="/reports">View analytics</a>
               {% elif current_user %}
@@ -58,7 +58,7 @@
 
             {% if featured_event %}
               <div class="featured-snippet mt-4">
-                <div class="featured-label">Featured next</div>
+                <div class="featured-label">Next event</div>
                 <div class="featured-name">{{ featured_event.title }}</div>
                 <div class="small text-secondary">{{ featured_event.event_date | datetime }} • {{ featured_event.venue }}</div>
                 <div class="d-flex justify-content-between align-items-center mt-3">
@@ -68,9 +68,9 @@
               </div>
             {% else %}
               <div class="featured-snippet mt-4">
-                <div class="featured-label">What happens next</div>
-                <div class="featured-name">Your next event can start here.</div>
-                <div class="small text-secondary">Publish an event, open registrations, and keep ticketing and check-in in one place.</div>
+                <div class="featured-label">No events yet</div>
+                <div class="featured-name">The catalog will appear here after the first event is created.</div>
+                <div class="small text-secondary">Organizers can add events, set prices, and open booking for visitors.</div>
               </div>
             {% endif %}
           </div>
@@ -82,16 +82,16 @@
   <section class="container">
     <div class="feature-strip">
       <div class="feature-card">
-        <h3>Event publishing</h3>
-        <p>Launch branded event pages with venue details, schedules, pricing, and capacity controls.</p>
+        <h3>Events</h3>
+        <p>Each event page shows the date, venue, city, price, and remaining seats.</p>
       </div>
       <div class="feature-card">
-        <h3>Digital ticketing</h3>
-        <p>Capture bookings instantly and deliver ticket codes with QR-based validation links.</p>
+        <h3>Tickets</h3>
+        <p>After booking, the system creates a digital ticket with a code and QR check-in link.</p>
       </div>
       <div class="feature-card">
-        <h3>Operations dashboard</h3>
-        <p>Track sell-through, arrivals, and event performance from one organizer workspace.</p>
+        <h3>Organizer tools</h3>
+        <p>Organizers can create events, edit details, check in attendees, and review reports.</p>
       </div>
     </div>
   </section>

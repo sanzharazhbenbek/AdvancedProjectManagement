@@ -7,8 +7,9 @@ EventSphere is an event and ticketing management platform for browsing events, b
 The project now includes a Streamlit version for free deployment. This keeps the same MVP idea from the project topic:
 
 - event creation and management
-- online ticket booking
-- QR-based ticket validation
+- sandbox payment confirmation with stored payment references
+- online ticket booking with QR issuance
+- public QR-based ticket validation and organizer check-in
 - basic sales and attendance reports
 
 ### Run locally
@@ -52,6 +53,11 @@ Seed accounts created on first run:
 - Admin: `admin@eventsphere.local` / `Admin123!`
 - Organizer: `organizer@eventsphere.local` / `Organizer123!`
 - User: `user@eventsphere.local` / `User123!`
+
+Optional environment variables:
+
+- `PUBLIC_APP_URL` to control the absolute URL embedded into ticket QR codes
+- `DATABASE_URL` to point the app to a different SQLite or external database
 
 ### Free deployment
 

@@ -20,11 +20,11 @@ from app.main import (
     build_system_stats,
     can_manage_event,
     can_validate_ticket,
+    create_confirmed_ticket,
     count_active_admins,
     format_datetime,
     format_money,
-    generate_qr_svg_data_uri,
-    generate_ticket_code,
+    mask_payment_identifier,
     get_checked_in_quantity_for_event,
     get_checked_in_ticket_map,
     get_recent_tickets_for_scope,
@@ -33,11 +33,14 @@ from app.main import (
     get_visible_events,
     is_booking_open,
     migrate_existing_schema,
+    parse_ticket_lookup,
+    prepare_ticket_record,
     prepare_event_card,
+    sync_ticket_records,
     validate_booking_form,
     validate_event_form,
 )
-from app.models import Event, Ticket, User
+from app.models import Event, PaymentRecord, Ticket, User
 from app.security import hash_password, normalize_email, verify_password
 from app.seed import seed_default_users
 
@@ -259,6 +262,7 @@ def get_session_factory():
     SessionLocal = build_session_factory(engine)
     with SessionLocal() as session:
         seed_default_users(session)
+        sync_ticket_records(session)
     return SessionLocal
 
 
@@ -279,8 +283,13 @@ def init_state() -> None:
         "current_event_id": None,
         "current_ticket_code": None,
         "current_admin_user_id": None,
+        "public_ticket_code": None,
+        "public_payment_reference": None,
         "event_search": "",
         "checkin_code": "",
+        "checkin_payment_reference": None,
+        "pending_checkout": None,
+        "last_query_signature": None,
         "notices": [],
     }
     for key, value in defaults.items():
@@ -324,12 +333,34 @@ def focus_ticket(ticket_code: str | None) -> None:
     st.session_state.current_ticket_code = ticket_code
 
 
+def clear_checkout() -> None:
+    st.session_state.pending_checkout = None
+
+
 def logout() -> None:
     st.session_state.user_id = None
     focus_ticket(None)
+    clear_checkout()
     go_to("Discover events")
-    add_notice("success", "You have been signed out.")
+    add_notice("success", "Signed out.")
     st.rerun()
+
+
+def sync_query_ticket_context() -> None:
+    ticket = st.query_params.get("ticket")
+    payment = st.query_params.get("payment")
+    signature = f"{ticket or ''}|{payment or ''}"
+    if signature == st.session_state.get("last_query_signature"):
+        return
+
+    st.session_state.last_query_signature = signature
+    if not ticket:
+        return
+
+    lookup = parse_ticket_lookup(f"ticket={ticket}&payment={payment or ''}")
+    st.session_state.public_ticket_code = lookup["ticket_code"]
+    st.session_state.public_payment_reference = lookup["payment_reference"]
+    go_to("Ticket validation")
 
 
 def render_app_style() -> None:
@@ -345,7 +376,7 @@ def render_sidebar(user: User | None) -> str:
         """
         <div class="brand-lockup">
           <h2>EventSphere</h2>
-          <p>Free-to-deploy Streamlit MVP for event booking, QR tickets, and attendance tracking.</p>
+          <p>Event booking, QR tickets, and attendance tracking.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -367,7 +398,7 @@ def render_sidebar(user: User | None) -> str:
         if st.sidebar.button("Log out", width="stretch"):
             logout()
 
-    pages = ["Discover events"]
+    pages = ["Discover events", "Ticket validation"]
     if user is None:
         pages.extend(["Sign in", "Create account"])
     else:
@@ -457,10 +488,13 @@ def fetch_ticket_by_code(db: Session, ticket_code: str | None) -> Ticket | None:
         return None
     stmt = (
         select(Ticket)
-        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser))
+        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser), selectinload(Ticket.payments))
         .where(Ticket.ticket_code == ticket_code)
     )
-    return db.scalar(stmt)
+    ticket = db.scalar(stmt)
+    if ticket is not None:
+        prepare_ticket_record(ticket)
+    return ticket
 
 
 def create_account(db: Session, full_name: str, email: str, password: str, confirm_password: str, role: str) -> None:
@@ -503,7 +537,7 @@ def create_account(db: Session, full_name: str, email: str, password: str, confi
         go_to("Organizer workspace")
     else:
         go_to("My tickets")
-    add_notice("success", f"Welcome to EventSphere, {user.full_name}.")
+    add_notice("success", "Account created.")
     st.rerun()
 
 
@@ -523,8 +557,25 @@ def sign_in(db: Session, email: str, password: str) -> None:
         go_to("Organizer workspace")
     else:
         go_to("My tickets")
-    add_notice("success", f"Welcome back, {user.full_name}.")
+    add_notice("success", "Signed in.")
     st.rerun()
+
+
+def mask_email(value: str) -> str:
+    local, _, domain = value.partition("@")
+    if not domain:
+        return value
+    visible = local[:2] if len(local) >= 2 else local
+    return f"{visible}***@{domain}"
+
+
+def pending_checkout_for(event: Event, user: User | None) -> dict[str, Any] | None:
+    checkout = st.session_state.get("pending_checkout")
+    if not checkout or user is None:
+        return None
+    if checkout.get("event_id") != event.id or checkout.get("user_id") != user.id:
+        return None
+    return checkout
 
 
 def render_event_card(event: Event, user: User | None) -> None:
@@ -620,92 +671,165 @@ def render_event_detail(db: Session, event: Event, user: User | None) -> None:
             st.warning("Bookings are currently closed for this event.")
             return
 
-        default_form = {"payment_method": PAYMENT_METHODS[0], "quantity": 1}
-        with st.form(f"book-event-{event.id}"):
-            quantity = st.number_input(
-                "Tickets",
-                min_value=1,
-                max_value=max(1, min(event.remaining_capacity, 10)),
-                value=min(default_form["quantity"], max(1, min(event.remaining_capacity, 10))),
-                step=1,
-            )
-            payment_method = st.selectbox("Payment method", PAYMENT_METHODS, index=0)
-            submitted = st.form_submit_button("Confirm booking", width="stretch")
+        active_checkout = pending_checkout_for(event, user)
+        if active_checkout is None:
+            default_form = {"payment_method": PAYMENT_METHODS[0], "quantity": 1, "payer_reference": ""}
+            with st.form(f"book-event-{event.id}"):
+                quantity = st.number_input(
+                    "Tickets",
+                    min_value=1,
+                    max_value=max(1, min(event.remaining_capacity, 10)),
+                    value=min(default_form["quantity"], max(1, min(event.remaining_capacity, 10))),
+                    step=1,
+                )
+                payment_method = st.selectbox("Payment method", PAYMENT_METHODS, index=0)
+                payer_reference = st.text_input(
+                    "Payment reference",
+                    placeholder="Phone suffix, card last 4 digits, or buyer reference",
+                )
+                sandbox_ready = st.checkbox("I confirm this is a sandbox payment for demo purposes.")
+                submitted = st.form_submit_button("Continue to payment confirmation", width="stretch")
 
-        if submitted:
-            booking_form, errors = validate_booking_form(
-                {"payment_method": payment_method, "quantity": str(quantity)},
-                user,
-            )
-            if booking_form["quantity"] > event.remaining_capacity:
-                errors.append("Requested ticket quantity exceeds remaining capacity.")
+            if submitted:
+                booking_form, errors = validate_booking_form(
+                    {
+                        "payment_method": payment_method,
+                        "quantity": str(quantity),
+                        "payer_reference": payer_reference,
+                    },
+                    user,
+                )
+                if booking_form["quantity"] > event.remaining_capacity:
+                    errors.append("Requested ticket quantity exceeds remaining capacity.")
+                if not sandbox_ready:
+                    errors.append("Confirm the sandbox payment notice before continuing.")
 
-            if errors:
-                for error in errors:
-                    st.error(error)
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                    return
+
+                st.session_state.pending_checkout = {
+                    "event_id": event.id,
+                    "user_id": user.id,
+                    "event_title": event.title,
+                    "quantity": booking_form["quantity"],
+                    "payment_method": booking_form["payment_method"],
+                    "payer_reference": booking_form["payer_reference"],
+                    "total_amount": event.ticket_price * booking_form["quantity"],
+                }
+                st.rerun()
+            return
+
+        st.markdown(
+            f"""
+            <div class="surface-card">
+              <h4>Payment confirmation</h4>
+              <p><strong>Event:</strong> {h(active_checkout["event_title"])}</p>
+              <p><strong>Tickets:</strong> {active_checkout["quantity"]}</p>
+              <p><strong>Total:</strong> {format_money(active_checkout["total_amount"])}</p>
+              <p><strong>Method:</strong> {h(active_checkout["payment_method"])}</p>
+              <p><strong>Payer reference:</strong> {h(mask_payment_identifier(active_checkout["payer_reference"]))}</p>
+              <p class="muted">No real charge will be made. When you confirm, the system will save a verified payment record and issue a QR ticket immediately.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        confirm_col, cancel_col = st.columns(2)
+        if confirm_col.button("Confirm sandbox payment", key=f"confirm-payment-{event.id}", width="stretch"):
+            refreshed_event = fetch_event_by_id(db, event.id)
+            if refreshed_event is None or active_checkout["quantity"] > refreshed_event.remaining_capacity:
+                clear_checkout()
+                st.error("The remaining capacity changed. Please restart the booking.")
                 return
 
-            ticket = Ticket(
-                event_id=event.id,
-                purchaser_id=user.id,
-                purchaser_name=user.full_name,
-                purchaser_email=user.email,
-                quantity=booking_form["quantity"],
-                total_amount=event.ticket_price * booking_form["quantity"],
-                payment_method=booking_form["payment_method"],
-                payment_status="Confirmed",
-                ticket_code=generate_ticket_code(db),
+            ticket = create_confirmed_ticket(
+                db=db,
+                event=event,
+                purchaser=user,
+                quantity=int(active_checkout["quantity"]),
+                payment_method=str(active_checkout["payment_method"]),
+                payer_reference=str(active_checkout["payer_reference"]),
+                confirmation_note="Sandbox payment confirmed from the Streamlit checkout.",
             )
-            db.add(ticket)
-            db.commit()
-            db.refresh(ticket)
-
+            clear_checkout()
             focus_ticket(ticket.ticket_code)
             go_to("My tickets")
-            add_notice("success", "Booking confirmed. Your digital ticket is ready.")
+            add_notice("success", "Payment confirmed and ticket issued.")
+            st.rerun()
+        if cancel_col.button("Cancel", key=f"cancel-payment-{event.id}", width="stretch"):
+            clear_checkout()
             st.rerun()
 
 
-def render_ticket_view(ticket: Ticket) -> None:
-    sold = ticket.quantity
-    qr_data_uri = generate_qr_svg_data_uri(ticket.ticket_code)
+def render_ticket_view(ticket: Ticket, *, show_private_details: bool = True) -> None:
+    prepare_ticket_record(ticket)
+    latest_payment = max(ticket.payments, key=lambda item: item.created_at, default=None)
+    attendee_line = (
+        f"{ticket.purchaser_name} ({ticket.purchaser_email})"
+        if show_private_details
+        else f"{ticket.purchaser_name} ({mask_email(ticket.purchaser_email)})"
+    )
 
-    left, right = st.columns([1.4, 1])
+    left, right = st.columns([1.45, 1])
     with left:
         st.markdown(
             f"""
             <div class="ticket-card">
+              <div class="pill-row">
+                <span class="pill pill-status-{'live' if ticket.is_checked_in else 'upcoming'}">{h(ticket.ticket_status)}</span>
+                <span class="pill pill-category">{h(ticket.payment_status)}</span>
+              </div>
               <h2>{h(ticket.event.title)}</h2>
               <p class="muted">{h(format_datetime(ticket.event.event_date))} | {h(ticket.event.venue)}, {h(ticket.event.city)}</p>
               <p><strong>Ticket code:</strong> {h(ticket.ticket_code)}</p>
-              <p><strong>Attendee:</strong> {h(ticket.purchaser_name)} ({h(ticket.purchaser_email)})</p>
-              <p><strong>Quantity:</strong> {sold}</p>
+              <p><strong>Attendee:</strong> {h(attendee_line)}</p>
+              <p><strong>Quantity:</strong> {ticket.quantity}</p>
               <p><strong>Total paid:</strong> {format_money(ticket.total_amount)}</p>
               <p><strong>Payment method:</strong> {h(ticket.payment_method)}</p>
-              <p><strong>Status:</strong> {'Checked in' if ticket.checked_in_at else 'Ready for entry'}</p>
+              <p><strong>Payment reference:</strong> {h(ticket.payment_reference)}</p>
+              <p><strong>Payment verified:</strong> {h(format_datetime(ticket.payment_verified_at)) if ticket.payment_verified_at else 'Pending'}</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
         if ticket.checked_in_at:
             st.success(f"Checked in at {format_datetime(ticket.checked_in_at)}")
+        else:
+            st.info("Payment is confirmed and this ticket is ready for entry.")
+
+        if latest_payment is not None:
+            st.markdown(
+                f"""
+                <div class="surface-card">
+                  <h4>Payment receipt</h4>
+                  <p><strong>Gateway:</strong> {h(latest_payment.provider_name)}</p>
+                  <p><strong>Reference:</strong> {h(latest_payment.transaction_reference)}</p>
+                  <p><strong>Verified:</strong> {h(format_datetime(latest_payment.verified_at)) if latest_payment.verified_at else 'Pending'}</p>
+                  <p><strong>Payer reference:</strong> {h(latest_payment.payer_identifier or 'Sandbox verified')}</p>
+                  <p class="muted">{h(latest_payment.confirmation_note or 'Payment verification record saved.')}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     with right:
         st.markdown(
             f"""
             <div class="qr-wrap">
-              <img src="{qr_data_uri}" alt="QR code" style="width:100%; max-width:320px;" />
+              <img src="{ticket.qr_svg_data_uri}" alt="QR code" style="width:100%; max-width:320px;" />
             </div>
             """,
             unsafe_allow_html=True,
         )
-        st.caption("The QR code contains the ticket code for check-in.")
+        st.caption("Scan this QR code to open the public ticket validation page.")
+        st.code(ticket.validation_url, language=None)
 
 
 def render_discover_page(db: Session, user: User | None) -> None:
     render_hero(
-        "Discover events without paying for hosting",
-        "This Streamlit version keeps the same MVP idea from the project brief: organizers publish events, users book tickets, and staff validate entry with QR-based check-in.",
+        "Discover and book live events",
+        "EventSphere combines event publishing, sandbox payment confirmation, QR tickets, and organizer check-in in one web app.",
     )
 
     stats = build_system_stats(db)
@@ -756,7 +880,7 @@ def render_discover_page(db: Session, user: User | None) -> None:
 def render_sign_in_page(db: Session, user: User | None) -> None:
     render_hero(
         "Sign in",
-        "Organizers can manage events and reports here, while attendees can book tickets and keep their QR passes in one place.",
+        "Attendees keep their tickets here, while organizers manage events, reports, and check-in.",
     )
     if user is not None:
         st.info("You are already signed in.")
@@ -773,8 +897,8 @@ def render_sign_in_page(db: Session, user: User | None) -> None:
 
 def render_create_account_page(db: Session, user: User | None) -> None:
     render_hero(
-        "Create your EventSphere account",
-        "Use a regular user account to buy tickets or an organizer account to publish and manage events.",
+        "Create an EventSphere account",
+        "Register as a user to book tickets or as an organizer to publish events and manage validation.",
     )
     if user is not None:
         st.info("You are already signed in.")
@@ -795,7 +919,7 @@ def render_create_account_page(db: Session, user: User | None) -> None:
 def render_my_tickets_page(db: Session, user: User | None) -> None:
     render_hero(
         "My tickets",
-        "Every confirmed booking generates a digital ticket code and QR entry pass that can be checked at the venue.",
+        "Every confirmed payment creates a digital ticket with a QR validation link and saved payment record.",
     )
     if user is None:
         st.warning("Sign in to view your tickets.")
@@ -803,7 +927,7 @@ def render_my_tickets_page(db: Session, user: User | None) -> None:
 
     tickets = db.scalars(
         select(Ticket)
-        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser))
+        .options(selectinload(Ticket.event), selectinload(Ticket.purchaser), selectinload(Ticket.payments))
         .where(Ticket.purchaser_id == user.id)
         .order_by(Ticket.created_at.desc())
     ).all()
@@ -812,6 +936,7 @@ def render_my_tickets_page(db: Session, user: User | None) -> None:
     checked_map = get_checked_in_ticket_map(db)
     for ticket in tickets:
         prepare_event_card(ticket.event, sold_map.get(ticket.event.id, 0), checked_map.get(ticket.event.id, 0))
+        prepare_ticket_record(ticket)
 
     if not tickets:
         st.markdown('<div class="empty-state">You have not booked any tickets yet.</div>', unsafe_allow_html=True)
@@ -843,6 +968,62 @@ def render_my_tickets_page(db: Session, user: User | None) -> None:
 
     selected_ticket = next(ticket for ticket in tickets if ticket.ticket_code == selected_code)
     render_ticket_view(selected_ticket)
+
+
+def render_ticket_validation_page(db: Session, user: User | None) -> None:
+    render_hero(
+        "Ticket validation",
+        "Open a ticket link or paste a QR payload to verify payment, ticket status, and check-in readiness.",
+    )
+
+    if st.session_state.get("public_ticket_code") and "public_validation_lookup" not in st.session_state:
+        st.session_state.public_validation_lookup = st.session_state.public_ticket_code
+
+    raw_lookup = st.text_input(
+        "Paste a QR link or ticket code",
+        key="public_validation_lookup",
+        placeholder="https://eventsphere.streamlit.app/?ticket=EVT-... or EVT-1234ABCD",
+    )
+    lookup = parse_ticket_lookup(raw_lookup)
+    ticket_code = lookup["ticket_code"] or st.session_state.get("public_ticket_code")
+    payment_reference = lookup["payment_reference"] or st.session_state.get("public_payment_reference")
+
+    if not ticket_code:
+        st.caption("Scan a QR code or paste a ticket link to validate a booking.")
+        return
+
+    ticket = fetch_ticket_by_code(db, ticket_code)
+    if ticket is None:
+        st.error("Ticket not found.")
+        return
+    if payment_reference and ticket.payment_reference != payment_reference:
+        st.error("The payment reference in the QR link does not match this ticket.")
+        return
+
+    render_ticket_view(ticket, show_private_details=False)
+    if ticket.payment_status != "Confirmed":
+        st.error("Payment has not been confirmed for this ticket.")
+    elif ticket.ticket_status == "Cancelled":
+        st.error("This ticket has been cancelled.")
+    elif ticket.checked_in_at is not None:
+        st.warning("This ticket has already been used for entry.")
+    else:
+        st.success("Ticket found, payment confirmed, and ready for entry.")
+
+    if (
+        user
+        and can_validate_ticket(user, ticket)
+        and ticket.checked_in_at is None
+        and ticket.payment_status == "Confirmed"
+        and ticket.ticket_status != "Cancelled"
+    ):
+        if st.button("Confirm check-in from validator", key=f"public-checkin-{ticket.ticket_code}", width="stretch"):
+            ticket.checked_in_at = datetime.now()
+            ticket.ticket_status = "Checked in"
+            db.add(ticket)
+            db.commit()
+            add_notice("success", "Check-in completed from the public validator.")
+            st.rerun()
 
 
 def event_form_defaults(current_user: User, event: Event | None = None) -> dict[str, Any]:
@@ -930,14 +1111,14 @@ def render_event_editor(db: Session, current_user: User, event: Event | None = N
         db.commit()
         db.refresh(record)
         focus_event(record.id)
-        add_notice("success", "Event created successfully.")
+        add_notice("success", "Event created.")
     else:
         for key, value in form_data.items():
             setattr(event, key, value)
         db.add(event)
         db.commit()
         focus_event(event.id)
-        add_notice("success", "Event updated successfully.")
+        add_notice("success", "Event updated.")
 
     go_to("Organizer workspace")
     st.rerun()
@@ -948,12 +1129,14 @@ def render_check_in_panel(db: Session, current_user: User) -> None:
         code = st.text_input(
             "Enter or scan ticket code",
             value=st.session_state.checkin_code,
-            placeholder="EVT-1234ABCD",
+            placeholder="EVT-1234ABCD or a full validation link",
         )
         lookup = st.form_submit_button("Lookup ticket", width="stretch")
 
     if lookup:
-        st.session_state.checkin_code = code.strip().upper()
+        normalized = parse_ticket_lookup(code)
+        st.session_state.checkin_code = normalized["ticket_code"] or code.strip().upper()
+        st.session_state.checkin_payment_reference = normalized["payment_reference"]
         st.rerun()
 
     ticket = fetch_ticket_by_code(db, st.session_state.checkin_code)
@@ -963,8 +1146,18 @@ def render_check_in_panel(db: Session, current_user: User) -> None:
     if ticket is None:
         st.error("Ticket not found.")
         return
+    payment_reference = st.session_state.get("checkin_payment_reference")
+    if payment_reference and ticket.payment_reference != payment_reference:
+        st.error("The scanned QR payment reference does not match this ticket.")
+        return
     if not can_validate_ticket(current_user, ticket):
         st.error("You do not have permission to validate this ticket.")
+        return
+    if ticket.payment_status != "Confirmed":
+        st.error("Payment has not been confirmed for this ticket.")
+        return
+    if ticket.ticket_status == "Cancelled":
+        st.error("This ticket is cancelled and cannot be checked in.")
         return
 
     render_ticket_view(ticket)
@@ -974,9 +1167,10 @@ def render_check_in_panel(db: Session, current_user: User) -> None:
 
     if st.button("Confirm check-in", key=f"checkin-{ticket.ticket_code}", width="stretch"):
         ticket.checked_in_at = datetime.now()
+        ticket.ticket_status = "Checked in"
         db.add(ticket)
         db.commit()
-        add_notice("success", "Check-in completed successfully.")
+        add_notice("success", "Check-in completed.")
         st.rerun()
 
 
@@ -1009,11 +1203,16 @@ def render_reports_panel(db: Session, current_user: User) -> None:
     total_revenue = sum(row["revenue"] for row in report_rows)
     total_sold = sum(row["tickets_sold"] for row in report_rows)
     total_checked_in = sum(row["checked_in"] for row in report_rows)
+    payment_stmt = select(func.count(PaymentRecord.id)).where(PaymentRecord.status == "Confirmed").join(Ticket)
+    if organizer_scope_id is not None:
+        payment_stmt = payment_stmt.join(Event).where(Event.organizer_id == organizer_scope_id)
+    payment_count = int(db.scalar(payment_stmt) or 0)
 
-    top1, top2, top3 = st.columns(3)
+    top1, top2, top3, top4 = st.columns(4)
     top1.metric("Revenue", format_money(total_revenue))
     top2.metric("Tickets sold", total_sold)
     top3.metric("Checked in", total_checked_in)
+    top4.metric("Verified payments", payment_count)
 
     if insights["top_revenue"]:
         st.info(
@@ -1085,15 +1284,16 @@ def render_organizer_workspace(db: Session, user: User | None) -> None:
         else:
             st.markdown('<div class="empty-state">You have not created any events yet.</div>', unsafe_allow_html=True)
 
-        st.markdown("#### Recent bookings")
+            st.markdown("#### Recent bookings")
         if not recent_tickets:
             st.caption("No bookings yet.")
         for ticket in recent_tickets:
+            prepare_ticket_record(ticket)
             st.markdown(
                 f"""
                 <div class="surface-card">
                   <strong>{h(ticket.ticket_code)}</strong> | {h(ticket.event.title)}<br>
-                  <span class="muted">{h(ticket.purchaser_name)} booked {ticket.quantity} ticket(s)</span>
+                  <span class="muted">{h(ticket.purchaser_name)} booked {ticket.quantity} ticket(s) | {h(ticket.payment_status)} | {h(ticket.payment_reference)}</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1146,11 +1346,10 @@ def render_organizer_workspace(db: Session, user: User | None) -> None:
                 width="stretch",
                 disabled=not confirm_delete,
             ):
-                deleted_title = selected_event.title
                 db.delete(selected_event)
                 db.commit()
                 focus_event(None)
-                add_notice("success", f"{deleted_title} was deleted successfully.")
+                add_notice("success", "Event deleted.")
                 st.rerun()
 
     with checkin_tab:
@@ -1165,7 +1364,7 @@ def render_organizer_workspace(db: Session, user: User | None) -> None:
 def render_admin_console(db: Session, user: User | None) -> None:
     render_hero(
         "Admin console",
-        "Manage platform users, review activity across all events, and keep the free Streamlit deployment ready for demo use.",
+        "Manage users, review event activity, and monitor platform access.",
     )
     if user is None or user.role != "admin":
         st.warning("Admin access is required for this page.")
@@ -1242,7 +1441,7 @@ def render_admin_console(db: Session, user: User | None) -> None:
             target.role = new_role
             db.add(target)
             db.commit()
-            add_notice("success", f"{target.full_name} is now assigned as {ROLE_LABELS[new_role]}.")
+            add_notice("success", "Role updated.")
             st.rerun()
 
     st.markdown("#### Account status")
@@ -1256,7 +1455,7 @@ def render_admin_console(db: Session, user: User | None) -> None:
             target.is_active = not target.is_active
             db.add(target)
             db.commit()
-            add_notice("success", f"{target.full_name} is now {'active' if target.is_active else 'inactive'}.")
+            add_notice("success", f"Account {'activated' if target.is_active else 'deactivated'}.")
             st.rerun()
 
     recent_tickets = db.scalars(
@@ -1267,11 +1466,12 @@ def render_admin_console(db: Session, user: User | None) -> None:
     ).all()
     st.markdown("#### Recent ticket activity")
     for ticket in recent_tickets:
+        prepare_ticket_record(ticket)
         st.markdown(
             f"""
             <div class="surface-card">
               <strong>{h(ticket.ticket_code)}</strong> | {h(ticket.event.title)}<br>
-              <span class="muted">{h(ticket.purchaser_name)} | {ticket.quantity} ticket(s) | {format_money(ticket.total_amount)}</span>
+              <span class="muted">{h(ticket.purchaser_name)} | {ticket.quantity} ticket(s) | {format_money(ticket.total_amount)} | {h(ticket.payment_reference)}</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1280,6 +1480,7 @@ def render_admin_console(db: Session, user: User | None) -> None:
 
 def main() -> None:
     init_state()
+    sync_query_ticket_context()
     render_app_style()
 
     with db_session() as db:
@@ -1289,6 +1490,8 @@ def main() -> None:
 
         if page == "Discover events":
             render_discover_page(db, user)
+        elif page == "Ticket validation":
+            render_ticket_validation_page(db, user)
         elif page == "Sign in":
             render_sign_in_page(db, user)
         elif page == "Create account":

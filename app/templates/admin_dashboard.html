@@ -6,7 +6,7 @@
       <div>
         <span class="eyebrow">Administrative control</span>
         <h1 class="section-heading mt-2">Admin dashboard</h1>
-        <p class="text-secondary mb-0">Oversee account roles, platform access, event volume, and booking activity.</p>
+        <p class="text-secondary mb-0">Manage users, roles, access, and recent booking activity.</p>
       </div>
       <div class="d-flex flex-wrap gap-2">
         <a class="btn btn-outline-dark rounded-pill px-4" href="/organizer">Organizer view</a>
@@ -40,7 +40,7 @@
         <div class="panel-card p-4 h-100">
           <div class="metric-label">Revenue</div>
           <div class="metric-value">{{ stats.revenue | money }}</div>
-          <div class="metric-note">{{ stats.sell_through }}% sell-through</div>
+          <div class="metric-note">{{ stats.sell_through }}% of total capacity sold</div>
         </div>
       </div>
     </div>

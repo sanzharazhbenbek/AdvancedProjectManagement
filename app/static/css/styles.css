@@ -81,6 +81,36 @@ body {
   font-size: 0.9rem;
 }
 
+.account-strip {
+  border-bottom: 1px solid rgba(22, 24, 29, 0.08);
+  background: rgba(255, 250, 242, 0.74);
+}
+
+.account-strip-inner,
+.account-strip-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.account-strip-inner {
+  justify-content: space-between;
+  padding: 0.8rem 0;
+}
+
+.account-strip-copy {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.account-strip-copy strong {
+  color: var(--ink);
+}
+
+.account-strip-actions {
+  flex-wrap: wrap;
+}
+
 .hero-section {
   padding: 5.5rem 0 2rem;
 }
@@ -437,6 +467,11 @@ body {
   .hero-section {
     padding-top: 3.5rem;
   }
+
+  .account-strip-inner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 576px) {
@@ -451,6 +486,19 @@ body {
   .role-pill {
     width: 100%;
     justify-content: center;
+  }
+
+  .account-strip-actions {
+    width: 100%;
+  }
+
+  .account-strip-actions .btn,
+  .account-strip-actions form {
+    width: 100%;
+  }
+
+  .account-strip-actions form button {
+    width: 100%;
   }
 
   .footer-bottom,
