@@ -1,3 +1,2 @@
-from .main import app, create_app
+"""EventSphere application package."""
 
-__all__ = ["app", "create_app"]
