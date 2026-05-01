@@ -57,6 +57,7 @@ NOTICE_TYPES = {
     "danger": st.error,
     "info": st.info,
 }
+MISSING = object()
 
 
 APP_CSS = """
@@ -274,9 +275,10 @@ def db_session():
 def init_state() -> None:
     defaults = {
         "user_id": None,
-        "nav_page": "Discover events",
-        "selected_event_id": None,
-        "selected_ticket_code": None,
+        "current_page": "Discover events",
+        "current_event_id": None,
+        "current_ticket_code": None,
+        "current_admin_user_id": None,
         "event_search": "",
         "checkin_code": "",
         "notices": [],
@@ -308,12 +310,23 @@ def current_user(db: Session) -> User | None:
 
 
 def go_to(page: str) -> None:
-    st.session_state.nav_page = page
+    st.session_state.pending_page = page
+    st.session_state.current_page = page
+
+
+def focus_event(event_id: int | None) -> None:
+    st.session_state.pending_event_id = event_id
+    st.session_state.current_event_id = event_id
+
+
+def focus_ticket(ticket_code: str | None) -> None:
+    st.session_state.pending_ticket_code = ticket_code
+    st.session_state.current_ticket_code = ticket_code
 
 
 def logout() -> None:
     st.session_state.user_id = None
-    st.session_state.selected_ticket_code = None
+    focus_ticket(None)
     go_to("Discover events")
     add_notice("success", "You have been signed out.")
     st.rerun()
@@ -327,7 +340,7 @@ def h(value: Any) -> str:
     return escape(str(value), quote=True)
 
 
-def render_sidebar(user: User | None) -> None:
+def render_sidebar(user: User | None) -> str:
     st.sidebar.markdown(
         """
         <div class="brand-lockup">
@@ -351,7 +364,7 @@ def render_sidebar(user: User | None) -> None:
             """,
             unsafe_allow_html=True,
         )
-        if st.sidebar.button("Log out", use_container_width=True):
+        if st.sidebar.button("Log out", width="stretch"):
             logout()
 
     pages = ["Discover events"]
@@ -364,11 +377,29 @@ def render_sidebar(user: User | None) -> None:
         if user.role == "admin":
             pages.append("Admin console")
 
-    if st.session_state.nav_page not in pages:
-        st.session_state.nav_page = pages[0]
+    pending_page = st.session_state.pop("pending_page", MISSING)
+    if pending_page is not MISSING:
+        st.session_state.current_page = pending_page
+        st.session_state.nav_page_widget = pending_page
+    elif "nav_page_widget" in st.session_state:
+        st.session_state.current_page = st.session_state.nav_page_widget
 
-    st.sidebar.radio("Navigate", pages, key="nav_page")
+    current_page = st.session_state.get("current_page", pages[0])
+    if current_page not in pages:
+        current_page = pages[0]
+        st.session_state.current_page = current_page
+        st.session_state.nav_page_widget = current_page
+    elif "nav_page_widget" not in st.session_state:
+        st.session_state.nav_page_widget = current_page
+
+    selected_page = st.sidebar.radio(
+        "Navigate",
+        pages,
+        key="nav_page_widget",
+    )
+    st.session_state.current_page = selected_page
     st.sidebar.caption(f"Timezone: {settings.timezone_label}")
+    return selected_page
 
 
 def render_hero(title: str, subtitle: str) -> None:
@@ -529,15 +560,15 @@ def render_event_card(event: Event, user: User | None) -> None:
         )
     with right:
         if event.image_url:
-            st.image(event.image_url, use_container_width=True)
+            st.image(event.image_url, width="stretch")
         else:
             st.markdown('<div class="empty-state">No event cover image provided yet.</div>', unsafe_allow_html=True)
-        if st.button("Open details", key=f"open-event-{event.id}", use_container_width=True):
-            st.session_state.selected_event_id = event.id
+        if st.button("Open details", key=f"open-event-{event.id}", width="stretch"):
+            focus_event(event.id)
             st.rerun()
         if user and can_manage_event(user, event):
-            if st.button("Manage this event", key=f"manage-event-{event.id}", use_container_width=True):
-                st.session_state.selected_event_id = event.id
+            if st.button("Manage this event", key=f"manage-event-{event.id}", width="stretch"):
+                focus_event(event.id)
                 go_to("Organizer workspace")
                 st.rerun()
 
@@ -578,7 +609,7 @@ def render_event_detail(db: Session, event: Event, user: User | None) -> None:
 
     with right:
         if event.image_url:
-            st.image(event.image_url, use_container_width=True)
+            st.image(event.image_url, width="stretch")
 
         st.markdown("#### Book tickets")
         if user is None:
@@ -599,7 +630,7 @@ def render_event_detail(db: Session, event: Event, user: User | None) -> None:
                 step=1,
             )
             payment_method = st.selectbox("Payment method", PAYMENT_METHODS, index=0)
-            submitted = st.form_submit_button("Confirm booking", use_container_width=True)
+            submitted = st.form_submit_button("Confirm booking", width="stretch")
 
         if submitted:
             booking_form, errors = validate_booking_form(
@@ -629,7 +660,7 @@ def render_event_detail(db: Session, event: Event, user: User | None) -> None:
             db.commit()
             db.refresh(ticket)
 
-            st.session_state.selected_ticket_code = ticket.ticket_code
+            focus_ticket(ticket.ticket_code)
             go_to("My tickets")
             add_notice("success", "Booking confirmed. Your digital ticket is ready.")
             st.rerun()
@@ -717,7 +748,7 @@ def render_discover_page(db: Session, user: User | None) -> None:
         render_event_card(event, user)
         st.write("")
 
-    selected_event = fetch_event_by_id(db, st.session_state.selected_event_id)
+    selected_event = fetch_event_by_id(db, st.session_state.current_event_id)
     if selected_event:
         render_event_detail(db, selected_event, user)
 
@@ -734,7 +765,7 @@ def render_sign_in_page(db: Session, user: User | None) -> None:
     with st.form("sign-in-form"):
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", use_container_width=True)
+        submitted = st.form_submit_button("Sign in", width="stretch")
 
     if submitted:
         sign_in(db, email, password)
@@ -755,7 +786,7 @@ def render_create_account_page(db: Session, user: User | None) -> None:
         role = st.selectbox("Account type", ["user", "organizer"], format_func=lambda value: ROLE_LABELS[value])
         password = st.text_input("Password", type="password")
         confirm_password = st.text_input("Confirm password", type="password")
-        submitted = st.form_submit_button("Create account", use_container_width=True)
+        submitted = st.form_submit_button("Create account", width="stretch")
 
     if submitted:
         create_account(db, full_name, email, password, confirm_password, role)
@@ -787,8 +818,16 @@ def render_my_tickets_page(db: Session, user: User | None) -> None:
         return
 
     options = [ticket.ticket_code for ticket in tickets]
-    if st.session_state.selected_ticket_code not in options:
-        st.session_state.selected_ticket_code = options[0]
+    pending_ticket_code = st.session_state.pop("pending_ticket_code", MISSING)
+    if pending_ticket_code is not MISSING:
+        st.session_state.current_ticket_code = pending_ticket_code
+        st.session_state.ticket_selector_widget = pending_ticket_code
+    elif "ticket_selector_widget" in st.session_state and st.session_state.ticket_selector_widget in options:
+        st.session_state.current_ticket_code = st.session_state.ticket_selector_widget
+
+    if st.session_state.current_ticket_code not in options:
+        st.session_state.current_ticket_code = options[0]
+        st.session_state.ticket_selector_widget = st.session_state.current_ticket_code
 
     selected_code = st.selectbox(
         "Choose a ticket",
@@ -798,8 +837,9 @@ def render_my_tickets_page(db: Session, user: User | None) -> None:
             for ticket in tickets
             if ticket.ticket_code == code
         ),
-        key="selected_ticket_code",
+        key="ticket_selector_widget",
     )
+    st.session_state.current_ticket_code = selected_code
 
     selected_ticket = next(ticket for ticket in tickets if ticket.ticket_code == selected_code)
     render_ticket_view(selected_ticket)
@@ -853,7 +893,7 @@ def render_event_editor(db: Session, current_user: User, event: Event | None = N
         image_url = st.text_input("Cover image URL", value=defaults["image_url"])
         submitted = st.form_submit_button(
             "Create event" if event is None else "Save changes",
-            use_container_width=True,
+            width="stretch",
         )
 
     if not submitted:
@@ -889,14 +929,14 @@ def render_event_editor(db: Session, current_user: User, event: Event | None = N
         db.add(record)
         db.commit()
         db.refresh(record)
-        st.session_state.selected_event_id = record.id
+        focus_event(record.id)
         add_notice("success", "Event created successfully.")
     else:
         for key, value in form_data.items():
             setattr(event, key, value)
         db.add(event)
         db.commit()
-        st.session_state.selected_event_id = event.id
+        focus_event(event.id)
         add_notice("success", "Event updated successfully.")
 
     go_to("Organizer workspace")
@@ -910,7 +950,7 @@ def render_check_in_panel(db: Session, current_user: User) -> None:
             value=st.session_state.checkin_code,
             placeholder="EVT-1234ABCD",
         )
-        lookup = st.form_submit_button("Lookup ticket", use_container_width=True)
+        lookup = st.form_submit_button("Lookup ticket", width="stretch")
 
     if lookup:
         st.session_state.checkin_code = code.strip().upper()
@@ -932,7 +972,7 @@ def render_check_in_panel(db: Session, current_user: User) -> None:
         st.warning("This ticket was already checked in earlier.")
         return
 
-    if st.button("Confirm check-in", key=f"checkin-{ticket.ticket_code}", use_container_width=True):
+    if st.button("Confirm check-in", key=f"checkin-{ticket.ticket_code}", width="stretch"):
         ticket.checked_in_at = datetime.now()
         db.add(ticket)
         db.commit()
@@ -1069,8 +1109,17 @@ def render_organizer_workspace(db: Session, user: User | None) -> None:
             st.caption("Create an event first.")
         else:
             event_options = [event.id for event in prepared_events]
-            if st.session_state.selected_event_id not in event_options:
-                st.session_state.selected_event_id = event_options[0]
+            pending_event_id = st.session_state.pop("pending_event_id", MISSING)
+            if pending_event_id is not MISSING:
+                st.session_state.current_event_id = pending_event_id
+                if pending_event_id in event_options:
+                    st.session_state.event_selector_widget = pending_event_id
+            elif "event_selector_widget" in st.session_state and st.session_state.event_selector_widget in event_options:
+                st.session_state.current_event_id = st.session_state.event_selector_widget
+
+            if st.session_state.current_event_id not in event_options:
+                st.session_state.current_event_id = event_options[0]
+                st.session_state.event_selector_widget = st.session_state.current_event_id
 
             selected_id = st.selectbox(
                 "Choose event",
@@ -1080,8 +1129,9 @@ def render_organizer_workspace(db: Session, user: User | None) -> None:
                     for event in prepared_events
                     if event.id == event_id
                 ),
-                key="selected_event_id",
+                key="event_selector_widget",
             )
+            st.session_state.current_event_id = selected_id
             selected_event = next(event for event in prepared_events if event.id == selected_id)
             render_event_editor(db, user, selected_event)
 
@@ -1093,13 +1143,13 @@ def render_organizer_workspace(db: Session, user: User | None) -> None:
             if st.button(
                 "Delete event",
                 key=f"delete-event-{selected_event.id}",
-                use_container_width=True,
+                width="stretch",
                 disabled=not confirm_delete,
             ):
                 deleted_title = selected_event.title
                 db.delete(selected_event)
                 db.commit()
-                st.session_state.selected_event_id = None
+                focus_event(None)
                 add_notice("success", f"{deleted_title} was deleted successfully.")
                 st.rerun()
 
@@ -1153,14 +1203,28 @@ def render_admin_console(db: Session, user: User | None) -> None:
     if not users:
         return
 
+    admin_user_options = [item.id for item in users]
+    pending_admin_user_id = st.session_state.pop("pending_admin_user_id", MISSING)
+    if pending_admin_user_id is not MISSING:
+        st.session_state.current_admin_user_id = pending_admin_user_id
+        if pending_admin_user_id in admin_user_options:
+            st.session_state.admin_user_selector_widget = pending_admin_user_id
+    elif "admin_user_selector_widget" in st.session_state and st.session_state.admin_user_selector_widget in admin_user_options:
+        st.session_state.current_admin_user_id = st.session_state.admin_user_selector_widget
+
+    if st.session_state.current_admin_user_id not in admin_user_options:
+        st.session_state.current_admin_user_id = admin_user_options[0]
+        st.session_state.admin_user_selector_widget = st.session_state.current_admin_user_id
+
     selected_admin_user_id = st.selectbox(
         "Manage user",
-        [item.id for item in users],
+        admin_user_options,
         format_func=lambda user_id: next(
             f"{item.full_name} | {item.email}" for item in users if item.id == user_id
         ),
-        key="selected_admin_user_id",
+        key="admin_user_selector_widget",
     )
+    st.session_state.current_admin_user_id = selected_admin_user_id
     target = next(item for item in users if item.id == selected_admin_user_id)
 
     st.markdown("#### Update role")
@@ -1171,7 +1235,7 @@ def render_admin_console(db: Session, user: User | None) -> None:
         format_func=lambda role: ROLE_LABELS[role],
         key=f"role-for-{target.id}",
     )
-    if st.button("Save role", key=f"save-role-{target.id}", use_container_width=True):
+    if st.button("Save role", key=f"save-role-{target.id}", width="stretch"):
         if target.role == "admin" and new_role != "admin" and count_active_admins(db) <= 1:
             st.error("At least one active admin account must remain.")
         else:
@@ -1183,7 +1247,7 @@ def render_admin_console(db: Session, user: User | None) -> None:
 
     st.markdown("#### Account status")
     status_label = "Deactivate account" if target.is_active else "Reactivate account"
-    if st.button(status_label, key=f"toggle-status-{target.id}", use_container_width=True):
+    if st.button(status_label, key=f"toggle-status-{target.id}", width="stretch"):
         if target.id == user.id:
             st.error("You cannot deactivate your own account.")
         elif target.role == "admin" and target.is_active and count_active_admins(db) <= 1:
@@ -1220,10 +1284,9 @@ def main() -> None:
 
     with db_session() as db:
         user = current_user(db)
-        render_sidebar(user)
+        page = render_sidebar(user)
         show_notices()
 
-        page = st.session_state.nav_page
         if page == "Discover events":
             render_discover_page(db, user)
         elif page == "Sign in":
