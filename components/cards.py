@@ -20,10 +20,10 @@ def render_featured_event(event: dict) -> bool:
         st.write(event["description"])
         st.caption(f"{format_datetime(event['event_datetime'])} • {event['venue']}, {event['city']}")
         stats = st.columns(3)
-        stats[0].metric("Price", format_kzt(event["price_kzt"]))
+        stats[0].metric("From", format_kzt(event["price_from_kzt"]))
         stats[1].metric("Remaining", str(event["remaining_count"]))
         stats[2].metric("Sold", str(event["sold_count"]))
-        return st.button("Open featured event", key=f"featured-{event['id']}", width="stretch")
+        return st.button("Open featured event", key=f"featured-{event['id']}", width="stretch", type="primary")
 
     return False
 
@@ -37,9 +37,9 @@ def render_event_card(event: dict, key_prefix: str = "event") -> bool:
         st.caption(f"{format_datetime(event['event_datetime'])} • {event['venue']}, {event['city']}")
         st.caption(event["description"][:160] + ("..." if len(event["description"]) > 160 else ""))
         stats = st.columns(2)
-        stats[0].metric("Price", format_kzt(event["price_kzt"]))
+        stats[0].metric("From", format_kzt(event["price_from_kzt"]))
         stats[1].metric("Remaining", str(event["remaining_count"]))
-        return st.button("Open details", key=f"{key_prefix}-{event['id']}", width="stretch")
+        return st.button("Open details", key=f"{key_prefix}-{event['id']}", width="stretch", type="primary")
 
 
 def render_ticket_card(ticket: dict) -> tuple[bool, bool]:
@@ -47,8 +47,10 @@ def render_ticket_card(ticket: dict) -> tuple[bool, bool]:
         render_status_pills(ticket["event"].get("category"), ticket.get("status"))
         st.markdown(f"#### {ticket['event']['title']}")
         st.caption(f"{format_datetime(ticket['event']['event_datetime'])} • {ticket['event']['venue']}, {ticket['event']['city']}")
+        if ticket.get("seat_label"):
+            st.caption(ticket["seat_label"])
         st.code(ticket["ticket_code"])
         left, right = st.columns(2)
-        open_ticket = left.button("Open ticket", key=f"ticket-open-{ticket['id']}", width="stretch")
-        open_event = right.button("View event", key=f"ticket-event-{ticket['id']}", width="stretch")
+        open_ticket = left.button("Open ticket", key=f"ticket-open-{ticket['id']}", width="stretch", type="primary")
+        open_event = right.button("View event", key=f"ticket-event-{ticket['id']}", width="stretch", type="secondary")
         return open_ticket, open_event

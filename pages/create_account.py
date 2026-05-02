@@ -29,7 +29,7 @@ def render_page() -> None:
         role = st.selectbox("Account type", options=["user", "organizer"], format_func=lambda item: item.title())
         password = st.text_input("Password", type="password")
         confirm_password = st.text_input("Confirm password", type="password")
-        submitted = st.form_submit_button("Create account", width="stretch")
+        submitted = st.form_submit_button("Create account", width="stretch", type="primary")
 
     if submitted:
         errors = validate_registration(full_name, email, password, confirm_password, role)

@@ -27,7 +27,7 @@ def render_sidebar(current_user: dict | None) -> None:
             _admin_links()
 
         st.divider()
-        if st.button("Sign out", width="stretch"):
+        if st.button("Sign out", width="stretch", type="secondary"):
             sign_out()
             navigate_to(ROUTE_TO_PAGE["sign_in"], route="sign_in")
 
@@ -59,5 +59,5 @@ def _admin_links() -> None:
 
 
 def _nav_button(label: str, route: str) -> None:
-    if st.button(label, key=f"nav-{route}", width="stretch"):
+    if st.button(label, key=f"nav-{route}", width="stretch", type="secondary"):
         navigate_to(ROUTE_TO_PAGE[route], route=route)

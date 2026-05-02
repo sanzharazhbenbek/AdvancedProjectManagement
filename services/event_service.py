@@ -6,27 +6,35 @@ from typing import Any
 from sqlalchemy import select
 
 from db.database import session_scope
-from db.models import Booking, Event, Ticket
+from db.models import Booking, Event, Seat
 from db.repositories import (
     BookingRepository,
+    EmailLogRepository,
     EventRepository,
+    PaymentSimulationRepository,
+    SeatRepository,
     TicketRepository,
     UserRepository,
+    get_available_counts_by_event,
     get_checked_in_counts_by_event,
     get_paid_counts_by_event,
+    get_reserved_counts_by_event,
     get_revenue_by_event,
 )
+from services.seat_service import build_seat_inventory_payload, price_by_category, sync_event_seats
 from utils.date_utils import now_local
 from utils.formatters import slugify
 from utils.validators import validate_event_payload
 
 
-def derive_event_runtime_status(event: Event, sold_count: int, reference_time=None) -> str:
+def derive_event_runtime_status(event: Event, sold_count: int, available_count: int | None = None, reference_time=None) -> str:
     current_time = reference_time or now_local()
     if event.status == "cancelled":
         return "cancelled"
     if event.event_datetime < current_time:
         return "past"
+    if available_count is not None and available_count <= 0:
+        return "sold_out"
     if sold_count >= event.capacity:
         return "sold_out"
     return "upcoming"
@@ -36,9 +44,17 @@ def can_book_event(snapshot: dict[str, Any]) -> bool:
     return snapshot["runtime_status"] == "upcoming" and snapshot["remaining_count"] > 0
 
 
-def serialize_event(event: Event, sold_count: int, checked_in_count: int, viewer_booking: Booking | None = None) -> dict[str, Any]:
-    runtime_status = derive_event_runtime_status(event, sold_count)
-    remaining = max(event.capacity - sold_count, 0)
+def serialize_event(
+    event: Event,
+    sold_count: int,
+    checked_in_count: int,
+    viewer_booking: Booking | None = None,
+    *,
+    available_count: int | None = None,
+    reserved_count: int = 0,
+) -> dict[str, Any]:
+    remaining = available_count if available_count is not None else max(event.capacity - sold_count, 0)
+    runtime_status = derive_event_runtime_status(event, sold_count, remaining)
     return {
         "id": event.id,
         "slug": event.slug,
@@ -49,6 +65,7 @@ def serialize_event(event: Event, sold_count: int, checked_in_count: int, viewer
         "venue": event.venue,
         "event_datetime": event.event_datetime,
         "price_kzt": event.price_kzt,
+        "price_from_kzt": event.price_kzt,
         "capacity": event.capacity,
         "image_url": event.image_url,
         "organizer_id": event.organizer_id,
@@ -58,10 +75,20 @@ def serialize_event(event: Event, sold_count: int, checked_in_count: int, viewer
         "sold_count": sold_count,
         "checked_in_count": checked_in_count,
         "remaining_count": remaining,
+        "reserved_count": reserved_count,
         "fill_rate": (sold_count / event.capacity) if event.capacity else 0,
         "can_book": runtime_status == "upcoming" and remaining > 0,
         "viewer_has_paid_ticket": bool(viewer_booking and viewer_booking.status == "paid"),
         "viewer_ticket_id": viewer_booking.ticket.id if viewer_booking and viewer_booking.ticket else None,
+        "viewer_pending_booking_id": viewer_booking.id if viewer_booking and viewer_booking.status == "pending_payment" else None,
+        "viewer_pending_seat": None
+        if not viewer_booking or not viewer_booking.seat
+        else {
+            "category": viewer_booking.seat.category,
+            "row_label": viewer_booking.seat.row_label,
+            "seat_number": viewer_booking.seat.seat_number,
+            "price_kzt": viewer_booking.seat.price_kzt,
+        },
     }
 
 
@@ -78,10 +105,14 @@ def list_discover_events(filters: dict[str, Any] | None = None, viewer_id: int |
         event_ids = [event.id for event in events]
         sold_map = get_paid_counts_by_event(session, event_ids)
         checked_map = get_checked_in_counts_by_event(session, event_ids)
+        available_map = get_available_counts_by_event(session, event_ids)
+        reserved_map = get_reserved_counts_by_event(session, event_ids)
         viewer_bookings: dict[int, Booking] = {}
         if viewer_id is not None:
             bookings = BookingRepository(session).list_for_user(viewer_id)
-            viewer_bookings = {booking.event_id: booking for booking in bookings if booking.status == "paid"}
+            viewer_bookings = {
+                booking.event_id: booking for booking in bookings if booking.status in {"paid", "pending_payment"}
+            }
 
         snapshots = [
             serialize_event(
@@ -89,6 +120,8 @@ def list_discover_events(filters: dict[str, Any] | None = None, viewer_id: int |
                 sold_map.get(event.id, 0),
                 checked_map.get(event.id, 0),
                 viewer_bookings.get(event.id),
+                available_count=available_map.get(event.id, 0),
+                reserved_count=reserved_map.get(event.id, 0),
             )
             for event in events
         ]
@@ -114,7 +147,7 @@ def list_discover_events(filters: dict[str, Any] | None = None, viewer_id: int |
 
         def sort_key(item: dict[str, Any]):
             if sort_by == "price":
-                return (item["price_kzt"], item["event_datetime"])
+                return (item["price_from_kzt"], item["event_datetime"])
             if sort_by == "popularity":
                 return (-item["sold_count"], item["event_datetime"])
             if sort_by == "remaining":
@@ -151,10 +184,35 @@ def get_event_detail(event_id: int, viewer_id: int | None = None) -> dict[str, A
             return None
         sold_map = get_paid_counts_by_event(session, [event.id])
         checked_map = get_checked_in_counts_by_event(session, [event.id])
+        available_map = get_available_counts_by_event(session, [event.id])
+        reserved_map = get_reserved_counts_by_event(session, [event.id])
         viewer_booking = None
         if viewer_id is not None:
-            viewer_booking = BookingRepository(session).get_paid_for_user_event(viewer_id, event.id)
-        return serialize_event(event, sold_map.get(event.id, 0), checked_map.get(event.id, 0), viewer_booking)
+            bookings = BookingRepository(session).list_for_user(viewer_id)
+            viewer_booking = next((booking for booking in bookings if booking.event_id == event.id and booking.status in {"paid", "pending_payment"}), None)
+        return serialize_event(
+            event,
+            sold_map.get(event.id, 0),
+            checked_map.get(event.id, 0),
+            viewer_booking,
+            available_count=available_map.get(event.id, 0),
+            reserved_count=reserved_map.get(event.id, 0),
+        )
+
+
+def get_event_seat_inventory(event_id: int, actor: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    with session_scope() as session:
+        event = EventRepository(session).get_by_id(event_id)
+        if event is None:
+            return None, "Event not found."
+        if actor and actor["role"] == "organizer" and event.organizer_id != actor["id"]:
+            return None, "You can only view seats for your own events."
+
+        seats = SeatRepository(session).list_for_event(event_id)
+        payload = build_seat_inventory_payload(seats)
+        payload["event_id"] = event.id
+        payload["event_title"] = event.title
+        return payload, None
 
 
 def create_event(actor: dict[str, Any], payload: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
@@ -186,10 +244,20 @@ def create_event(actor: dict[str, Any], payload: dict[str, Any]) -> tuple[dict[s
             organizer_id=user.id,
             status="scheduled",
         )
+        sync_event_seats(session, event, mode="dynamic", target_capacity=int(payload["capacity"]), force_regenerate=True)
         session.refresh(event)
         sold_map = get_paid_counts_by_event(session, [event.id])
         checked_map = get_checked_in_counts_by_event(session, [event.id])
-        return serialize_event(event, sold_map.get(event.id, 0), checked_map.get(event.id, 0)), []
+        available_map = get_available_counts_by_event(session, [event.id])
+        return (
+            serialize_event(
+                event,
+                sold_map.get(event.id, 0),
+                checked_map.get(event.id, 0),
+                available_count=available_map.get(event.id, 0),
+            ),
+            [],
+        )
 
 
 def update_event(actor: dict[str, Any], event_id: int, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
@@ -203,8 +271,13 @@ def update_event(actor: dict[str, Any], event_id: int, payload: dict[str, Any]) 
             return None, ["You cannot edit this event."]
 
         sold_count = get_paid_counts_by_event(session, [event.id]).get(event.id, 0)
-        if payload["capacity"] < sold_count:
+        seats = SeatRepository(session).list_for_event(event.id)
+        occupied_seats = [seat for seat in seats if seat.status != "available"]
+        target_capacity = int(payload["capacity"])
+        if target_capacity < sold_count:
             errors.append("Capacity cannot be lower than tickets already sold.")
+        if occupied_seats and target_capacity != len(seats):
+            errors.append("Capacity cannot be changed while seats are sold or reserved.")
         if errors:
             return None, errors
 
@@ -215,13 +288,35 @@ def update_event(actor: dict[str, Any], event_id: int, payload: dict[str, Any]) 
         event.city = payload["city"].strip()
         event.venue = payload["venue"].strip()
         event.event_datetime = payload["event_datetime"]
-        event.price_kzt = int(payload["price_kzt"])
-        event.capacity = int(payload["capacity"])
         event.image_url = payload.get("image_url", "").strip() or None
+        old_base_price = event.price_kzt
+        event.price_kzt = int(payload["price_kzt"])
+
+        if not occupied_seats and (target_capacity != len(seats) or old_base_price != event.price_kzt):
+            sync_event_seats(session, event, mode="dynamic", target_capacity=target_capacity, force_regenerate=True)
+        elif old_base_price != event.price_kzt and seats:
+            category_prices = price_by_category(event.price_kzt)
+            for seat in seats:
+                if seat.status == "available":
+                    seat.price_kzt = category_prices[seat.category]
+                    session.add(seat)
+            event.price_kzt = min(category_prices.values())
+
         session.add(event)
         session.flush()
         checked_map = get_checked_in_counts_by_event(session, [event.id])
-        return serialize_event(event, sold_count, checked_map.get(event.id, 0)), []
+        available_map = get_available_counts_by_event(session, [event.id])
+        reserved_map = get_reserved_counts_by_event(session, [event.id])
+        return (
+            serialize_event(
+                event,
+                sold_count,
+                checked_map.get(event.id, 0),
+                available_count=available_map.get(event.id, 0),
+                reserved_count=reserved_map.get(event.id, 0),
+            ),
+            [],
+        )
 
 
 def cancel_event(actor: dict[str, Any], event_id: int) -> tuple[bool, str]:
@@ -239,6 +334,10 @@ def cancel_event(actor: dict[str, Any], event_id: int) -> tuple[bool, str]:
                 booking.cancelled_at = now_local()
                 if booking.payment is not None:
                     booking.payment.status = "cancelled"
+                if booking.seat is not None:
+                    booking.seat.status = "available"
+                    booking.seat.booking_id = None
+                    session.add(booking.seat)
         for ticket in event.tickets:
             if ticket.status == "valid":
                 ticket.status = "cancelled"
@@ -252,7 +351,18 @@ def list_organizer_events(actor: dict[str, Any]) -> list[dict[str, Any]]:
         event_ids = [event.id for event in events]
         sold_map = get_paid_counts_by_event(session, event_ids)
         checked_map = get_checked_in_counts_by_event(session, event_ids)
-        return [serialize_event(event, sold_map.get(event.id, 0), checked_map.get(event.id, 0)) for event in events]
+        available_map = get_available_counts_by_event(session, event_ids)
+        reserved_map = get_reserved_counts_by_event(session, event_ids)
+        return [
+            serialize_event(
+                event,
+                sold_map.get(event.id, 0),
+                checked_map.get(event.id, 0),
+                available_count=available_map.get(event.id, 0),
+                reserved_count=reserved_map.get(event.id, 0),
+            )
+            for event in events
+        ]
 
 
 def list_all_events_for_admin() -> list[dict[str, Any]]:
@@ -261,10 +371,18 @@ def list_all_events_for_admin() -> list[dict[str, Any]]:
         event_ids = [event.id for event in events]
         sold_map = get_paid_counts_by_event(session, event_ids)
         checked_map = get_checked_in_counts_by_event(session, event_ids)
+        available_map = get_available_counts_by_event(session, event_ids)
+        reserved_map = get_reserved_counts_by_event(session, event_ids)
         revenue_map = get_revenue_by_event(session, event_ids)
         rows = []
         for event in events:
-            snapshot = serialize_event(event, sold_map.get(event.id, 0), checked_map.get(event.id, 0))
+            snapshot = serialize_event(
+                event,
+                sold_map.get(event.id, 0),
+                checked_map.get(event.id, 0),
+                available_count=available_map.get(event.id, 0),
+                reserved_count=reserved_map.get(event.id, 0),
+            )
             snapshot["revenue_kzt"] = revenue_map.get(event.id, 0)
             rows.append(snapshot)
         return rows
@@ -288,6 +406,11 @@ def list_event_attendees(actor: dict[str, Any], event_id: int) -> tuple[list[dic
                 "status": ticket.status,
                 "checked_in_at": ticket.checked_in_at,
                 "booking_id": ticket.booking_id,
+                "payment_status": ticket.booking.payment.status if ticket.booking and ticket.booking.payment else None,
+                "seat_category": ticket.category,
+                "row_label": ticket.row_label,
+                "seat_number": ticket.seat_number,
+                "price_kzt": ticket.price_kzt,
             }
             for ticket in tickets
         ]
@@ -330,6 +453,69 @@ def deactivate_user(actor: dict[str, Any], user_id: int) -> tuple[bool, str]:
         return True, f"{user.full_name} has been deactivated."
 
 
+def list_admin_operational_rows() -> dict[str, list[dict[str, Any]]]:
+    with session_scope() as session:
+        bookings = BookingRepository(session).list_all()
+        payments = PaymentSimulationRepository(session).list_all()
+        tickets = TicketRepository(session).list_all()
+        email_logs = EmailLogRepository(session).list_all()
+        bookings_map = {booking.id: booking for booking in bookings}
+
+        return {
+            "bookings": [_serialize_booking_row(booking) for booking in bookings],
+            "payments": [
+                {
+                    "payment_id": payment.id,
+                    "booking_id": payment.booking_id,
+                    "provider": payment.provider,
+                    "status": payment.status,
+                    "payment_reference": payment.payment_reference,
+                    "created_at": payment.created_at,
+                    "confirmed_at": payment.confirmed_at,
+                    "event_title": payment.booking.event.title if payment.booking and payment.booking.event else None,
+                    "user_email": payment.booking.customer_email if payment.booking else None,
+                    "amount_kzt": payment.booking.amount_kzt if payment.booking else None,
+                }
+                for payment in payments
+            ],
+            "tickets": [
+                {
+                    "ticket_id": ticket.id,
+                    "ticket_code": ticket.ticket_code,
+                    "event_title": ticket.event.title if ticket.event else None,
+                    "user_email": ticket.user.email if ticket.user else None,
+                    "status": ticket.status,
+                    "category": ticket.category,
+                    "row_label": ticket.row_label,
+                    "seat_number": ticket.seat_number,
+                    "price_kzt": ticket.price_kzt,
+                    "created_at": ticket.created_at,
+                    "checked_in_at": ticket.checked_in_at,
+                }
+                for ticket in tickets
+            ],
+            "email_logs": [
+                {
+                    "email_log_id": email_log.id,
+                    "recipient_email": email_log.recipient_email,
+                    "subject": email_log.subject,
+                    "status": email_log.status,
+                    "attachment_path": email_log.attachment_path,
+                    "created_at": email_log.created_at,
+                    "booking_id": email_log.booking_id,
+                    "ticket_id": email_log.ticket_id,
+                    "event_title": bookings_map.get(email_log.booking_id).event.title
+                    if email_log.booking_id and email_log.booking_id in bookings_map and bookings_map[email_log.booking_id].event
+                    else None,
+                    "user_email": bookings_map.get(email_log.booking_id).customer_email
+                    if email_log.booking_id and email_log.booking_id in bookings_map
+                    else email_log.recipient_email,
+                }
+                for email_log in email_logs
+            ],
+        }
+
+
 def _unique_slug(session, base_slug: str, exclude_event_id: int | None = None) -> str:
     slug = base_slug or f"event-{secrets.token_hex(3)}"
     candidate = slug
@@ -356,9 +542,15 @@ def _serialize_booking_row(booking: Booking) -> dict[str, Any]:
         "amount_kzt": booking.amount_kzt,
         "created_at": booking.created_at,
         "paid_at": booking.paid_at,
+        "event_id": booking.event_id,
         "event_title": booking.event.title if booking.event else "Unknown event",
         "user_name": booking.user.full_name if booking.user else "Unknown attendee",
-        "user_email": booking.user.email if booking.user else "Unknown attendee",
+        "user_email": booking.customer_email or (booking.user.email if booking.user else None),
         "payment_reference": booking.payment.payment_reference if booking.payment else None,
+        "payment_status": booking.payment.status if booking.payment else None,
         "ticket_id": booking.ticket.id if booking.ticket else None,
+        "seat_category": booking.seat.category if booking.seat else None,
+        "row_label": booking.seat.row_label if booking.seat else None,
+        "seat_number": booking.seat.seat_number if booking.seat else None,
+        "payment_deadline": booking.payment_deadline or booking.expires_at,
     }

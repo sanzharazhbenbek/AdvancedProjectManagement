@@ -45,7 +45,7 @@ def render_event_form(defaults: dict[str, Any] | None = None, submit_label: str 
         )
         image_url = st.text_input("Cover image URL", value=defaults.get("image_url", ""))
         description = st.text_area("Description", value=defaults.get("description", ""), height=180)
-        submitted = st.form_submit_button(submit_label, width="stretch")
+        submitted = st.form_submit_button(submit_label, width="stretch", type="primary")
 
     if not submitted:
         return None

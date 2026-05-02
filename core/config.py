@@ -33,6 +33,10 @@ class Settings:
         return self.base_dir / "assets"
 
     @property
+    def tickets_dir(self) -> Path:
+        return self.data_dir / "tickets"
+
+    @property
     def database_path(self) -> Path:
         return self.data_dir / "eventsphere.db"
 
@@ -42,7 +46,7 @@ class Settings:
 
     @property
     def public_app_url(self) -> str:
-        return os.getenv("PUBLIC_APP_URL", "http://localhost:8501").rstrip("/")
+        return os.getenv("PUBLIC_APP_URL", "https://eventsphere.streamlit.app").rstrip("/")
 
 
 settings = Settings()

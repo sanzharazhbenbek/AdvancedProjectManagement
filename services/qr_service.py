@@ -8,9 +8,12 @@ import qrcode
 from core.config import settings
 
 
-def build_payment_payload(booking_id: int, payment_reference: str | None = None) -> str:
-    suffix = f"&reference={payment_reference}" if payment_reference else ""
-    return f"{settings.public_app_url}?route=payment&booking_id={booking_id}{suffix}"
+def build_payment_payload(booking_id: int) -> str:
+    return f"{settings.public_app_url}?route=payment&booking_id={booking_id}"
+
+
+def build_payment_confirmation_payload(token: str) -> str:
+    return f"{settings.public_app_url}?route=payment_confirm&token={token}"
 
 
 def build_ticket_payload(ticket_id: int, ticket_code: str) -> str:

@@ -3,9 +3,9 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from components.layout import bootstrap_page, render_page_header
+from components.layout import bootstrap_page, render_empty_state, render_page_header
 from components.sidebar import render_sidebar
-from components.tables import render_recent_transactions
+from components.tables import render_event_management_table, render_recent_transactions
 from core.navigation import ROUTE_TO_PAGE
 from core.session import flash, navigate_to
 from services.analytics_service import get_organizer_dashboard
@@ -32,6 +32,8 @@ def render_page() -> None:
             {"label": "Revenue", "value": format_kzt(dashboard["metrics"]["revenue_kzt"])},
             {"label": "Tickets sold", "value": dashboard["metrics"]["tickets_sold"]},
             {"label": "Bookings", "value": dashboard["metrics"]["total_bookings"]},
+            {"label": "Available seats", "value": dashboard["metrics"]["available_seats"]},
+            {"label": "Reserved seats", "value": dashboard["metrics"]["reserved_seats"]},
             {"label": "Fill rate", "value": format_percent(dashboard["metrics"]["fill_rate"])},
         ],
     )
@@ -66,6 +68,12 @@ def render_page() -> None:
         st.info("Attendance data is not available yet.")
     else:
         st.dataframe(attendance_df, width="stretch", hide_index=True)
+
+    st.subheader("Event seat and sales snapshot")
+    if not dashboard["event_rows"]:
+        render_empty_state("No managed events yet", "Create an event to start tracking seats, bookings, and attendance.")
+    else:
+        render_event_management_table(dashboard["event_rows"])
 
     st.subheader("Recent transactions")
     render_recent_transactions(dashboard["recent_transactions"])

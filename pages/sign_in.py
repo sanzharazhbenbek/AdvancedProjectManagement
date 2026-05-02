@@ -26,7 +26,7 @@ def render_page() -> None:
     with st.form("sign_in_form"):
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", width="stretch")
+        submitted = st.form_submit_button("Sign in", width="stretch", type="primary")
 
     if submitted:
         errors = validate_sign_in(email, password)

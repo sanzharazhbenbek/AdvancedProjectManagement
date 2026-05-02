@@ -67,12 +67,6 @@ html, body, [class*="css"] {
   font-size: 1.35rem;
 }
 
-.brand-card p {
-  margin: 0.35rem 0 0;
-  font-size: 0.92rem;
-  color: rgba(248,243,234,0.82);
-}
-
 .page-hero {
   background: linear-gradient(135deg, rgba(21,33,38,0.96), rgba(31,49,55,0.92));
   border: 1px solid rgba(255,255,255,0.08);
@@ -126,6 +120,32 @@ html, body, [class*="css"] {
 .pill-cancelled {
   background: rgba(196, 82, 57, 0.16);
   color: var(--danger);
+}
+
+.pill-pending_payment,
+.pill-reserved_pending_payment {
+  background: rgba(227, 164, 32, 0.16);
+  color: #8b6500;
+}
+
+.pill-paid,
+.pill-valid,
+.pill-available {
+  background: rgba(34, 129, 104, 0.16);
+  color: var(--success);
+}
+
+.pill-selected {
+  background: rgba(21, 33, 38, 0.95);
+  color: #fff8f0;
+}
+
+.pill-expired,
+.pill-used,
+.pill-sold,
+.pill-blocked {
+  background: rgba(96, 112, 120, 0.16);
+  color: #4f6168;
 }
 
 .surface-card {
@@ -182,6 +202,59 @@ div[data-testid="stMetric"] {
   border-radius: 18px;
   padding: 0.9rem 1rem;
 }
+
+.stButton > button,
+.stDownloadButton > button,
+div[data-testid="stFormSubmitButton"] > button {
+  background: #fff8f0;
+  color: var(--text);
+  border: 1px solid rgba(21, 33, 38, 0.14);
+  border-radius: 14px;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgba(21, 33, 38, 0.06);
+}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover,
+div[data-testid="stFormSubmitButton"] > button:hover {
+  border-color: rgba(159, 61, 25, 0.55);
+  background: #fff0df;
+  color: var(--text);
+}
+
+.stButton > button[kind="primary"],
+.stDownloadButton > button[kind="primary"],
+div[data-testid="stFormSubmitButton"] > button[kind="primary"] {
+  background: linear-gradient(135deg, #c9551f, #e3642a);
+  color: #fff8f0;
+  border-color: #9f3d19;
+}
+
+.stButton > button[kind="primary"]:hover,
+.stDownloadButton > button[kind="primary"]:hover,
+div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover {
+  background: linear-gradient(135deg, #af4716, #cf5824);
+  color: #fff8f0;
+}
+
+.stButton > button:disabled,
+.stDownloadButton > button:disabled,
+div[data-testid="stFormSubmitButton"] > button:disabled {
+  background: #f1e6da;
+  color: #8d7f73;
+  border-color: rgba(21, 33, 38, 0.08);
+}
+
+[data-testid="stSidebar"] .stButton:last-of-type > button {
+  background: rgba(196, 82, 57, 0.16);
+  color: #7a2919;
+  border-color: rgba(196, 82, 57, 0.35);
+}
+
+[data-testid="stSidebar"] .stButton:last-of-type > button:hover {
+  background: rgba(196, 82, 57, 0.22);
+  color: #692112;
+}
 </style>
 """
 
@@ -204,7 +277,6 @@ def render_brand_sidebar() -> None:
         """
         <div class="brand-card">
           <h2>EventSphere</h2>
-          <p>Ticketing, QR access, sandbox payments, and attendance workflows in one Streamlit app.</p>
         </div>
         """,
         unsafe_allow_html=True,

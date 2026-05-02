@@ -5,7 +5,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from utils.formatters import format_datetime, format_kzt, format_percent
+from utils.formatters import format_datetime, format_kzt, format_percent, seat_label
 
 
 def render_table(rows: list[dict[str, Any]], column_order: list[str] | None = None, hide_index: bool = True) -> None:
@@ -42,6 +42,8 @@ def render_attendee_table(rows: list[dict[str, Any]]) -> None:
             "Ticket": row["ticket_code"],
             "Attendee": row["attendee_name"],
             "Email": row["attendee_email"],
+            "Seat": seat_label(row.get("seat_category"), row.get("row_label"), row.get("seat_number")),
+            "Payment": row.get("payment_status") or "-",
             "Status": row["status"],
             "Checked in at": format_datetime(row["checked_in_at"]),
         }
@@ -56,6 +58,7 @@ def render_recent_transactions(rows: list[dict[str, Any]]) -> None:
             "Booking": row["id"],
             "Event": row["event_title"],
             "Attendee": row.get("user_name", row.get("user_email", "Unknown attendee")),
+            "Seat": seat_label(row.get("seat_category"), row.get("row_label"), row.get("seat_number")),
             "Status": row["status"],
             "Amount": format_kzt(row["amount_kzt"]),
             "Created": format_datetime(row["created_at"]),
@@ -64,3 +67,23 @@ def render_recent_transactions(rows: list[dict[str, Any]]) -> None:
         for row in rows
     ]
     render_table(formatted)
+
+
+def render_seat_table(rows: list[dict[str, Any]]) -> None:
+    formatted = [
+        {
+            "Category": row["category"],
+            "Row": row["row_label"],
+            "Seat": row["seat_number"],
+            "Price": format_kzt(row["price_kzt"]),
+            "Status": row["status"],
+        }
+        for row in rows
+    ]
+    render_table(formatted)
+
+
+def rows_to_csv_bytes(rows: list[dict[str, Any]]) -> bytes:
+    if not rows:
+        return b""
+    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8")

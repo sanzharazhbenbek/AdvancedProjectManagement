@@ -35,19 +35,21 @@ def render_page() -> None:
             {"label": "Tickets sold", "value": dashboard["metrics"]["tickets_sold"]},
             {"label": "Revenue", "value": format_kzt(dashboard["metrics"]["revenue_kzt"])},
             {"label": "Checked-in attendees", "value": dashboard["metrics"]["checked_in_attendees"]},
+            {"label": "Available seats", "value": dashboard["metrics"]["available_seats"]},
+            {"label": "Reserved seats", "value": dashboard["metrics"]["reserved_seats"]},
             {"label": "Fill rate", "value": format_percent(dashboard["metrics"]["fill_rate"])},
         ]
     )
 
     action_columns = st.columns(3, gap="medium")
     with action_columns[0]:
-        if st.button("Create a new event", width="stretch"):
+        if st.button("Create a new event", width="stretch", type="primary"):
             navigate_to(ROUTE_TO_PAGE["create_event"], route="create_event")
     with action_columns[1]:
-        if st.button("Manage my events", width="stretch"):
+        if st.button("Manage my events", width="stretch", type="secondary"):
             navigate_to(ROUTE_TO_PAGE["my_events"], route="my_events")
     with action_columns[2]:
-        if st.button("Open reports", width="stretch"):
+        if st.button("Open reports", width="stretch", type="secondary"):
             navigate_to(ROUTE_TO_PAGE["organizer_reports"], route="organizer_reports")
 
     st.subheader("Event management snapshot")

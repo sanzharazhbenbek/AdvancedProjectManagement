@@ -1,6 +1,6 @@
 # EventSphere
 
-EventSphere is a Streamlit-based event and ticketing management platform built to feel closer to a production-style SaaS workflow than a classroom MVP. It supports event discovery, role-based authentication, organizer operations, simulated Kaspi-style payments, QR tickets, and QR/manual attendance check-in.
+EventSphere is a Streamlit-based event and ticketing management platform built to feel closer to a production-style SaaS workflow than a classroom MVP. It supports event discovery, persistent seat inventory, role-based authentication, organizer operations, simulated Kaspi-style QR payments, digital tickets, email delivery logs, and QR/manual attendance check-in.
 
 ## What’s Included
 
@@ -8,10 +8,12 @@ EventSphere is a Streamlit-based event and ticketing management platform built t
 - role-based sign in, account creation, and session-aware navigation
 - secure password hashing with PBKDF2
 - SQLite persistence through SQLAlchemy
-- pending booking flow with sandbox payment confirmation
+- persistent per-event seat maps with category, row, seat number, and status tracking
+- pending booking flow with expiring seat reservations and token-based QR payment confirmation
 - QR ticket generation and per-ticket validation
+- ticket delivery simulation with saved email logs and downloadable ticket files
 - organizer dashboards with KPIs, event management, attendee lists, and reports
-- admin dashboards with user/event management and platform reporting
+- admin dashboards with user/event management, operational tables, exports, and platform reporting
 - first-run seeding with realistic Kazakhstan event data
 
 ## Project Structure
@@ -43,6 +45,7 @@ EventSphere is a Streamlit-based event and ticketing management platform built t
 - SQLite
 - Pandas
 - QRCode / Pillow
+- ReportLab
 
 ## Roles
 
@@ -74,19 +77,24 @@ First run adds at least six realistic Kazakhstan-based events, including:
 1. Browse events on `Discover events`.
 2. Open an event detail page.
 3. Click `Book ticket`.
-4. EventSphere creates a `pending_payment` booking.
-5. The user is redirected to the sandbox payment page.
-6. The payment page shows the amount, booking ID, payment reference, deadline, and a QR code pointing back to the Streamlit payment route.
-7. Clicking `I have paid / Confirm payment` marks the booking as paid, creates the digital ticket, and generates the QR ticket payload.
-8. The user is redirected to the ticket page.
+4. Choose a seat category, row, and available seat.
+5. EventSphere creates a `pending_payment` booking and marks that seat as `reserved_pending_payment`.
+6. The user is redirected to the sandbox payment waiting page.
+7. The waiting page shows the amount, booking ID, payment reference, deadline, and a QR code only.
+8. The QR opens a dedicated confirmation page with a secure token.
+9. Confirming payment on that QR page marks the payment as confirmed, converts the seat to `sold`, creates the digital ticket, and writes an email log with the ticket attachment path.
+10. The ticket page shows the QR ticket, seat details, delivery status, and download action.
 
 No real money is charged anywhere in the flow.
+
+Pending bookings automatically expire after the configured payment window and release their reserved seats back to inventory.
 
 ## Organizer Features
 
 - KPI overview for events, ticket sales, revenue, check-ins, and fill rate
 - create, edit, and cancel events
-- attendee table per event
+- attendee table per event with seat and payment details
+- seat inventory view per event with available, reserved, sold, and blocked states
 - organizer-only check-in validation for owned events
 - revenue, ticketing, attendance, and category reports
 
@@ -96,7 +104,8 @@ No real money is charged anywhere in the flow.
 - recent bookings view
 - manage users and deactivate accounts
 - manage events and cancel them globally
-- global reports for revenue, sold tickets, attendance, and category demand
+- global reports for revenue, sold tickets, attendance, category demand, bookings, payments, tickets, and email logs
+- CSV export for bookings, payments, tickets, and email logs
 
 ## Run Locally
 
@@ -118,7 +127,8 @@ streamlit run app.py
 
 - default database path: `data/eventsphere.db`
 - override with `DATABASE_URL`
-- the database is created and seeded automatically on first run
+- the database is created, migrated, and seeded automatically on first run
+- ticket files are generated under `data/tickets/`
 
 ## Environment Variables
 

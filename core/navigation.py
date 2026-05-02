@@ -16,6 +16,7 @@ ROUTE_TO_PAGE = {
     "manage_events": "pages/manage_events.py",
     "admin_reports": "pages/admin_reports.py",
     "payment": "pages/payment_simulator.py",
+    "payment_confirm": "pages/payment_confirm.py",
     "ticket": "pages/ticket_view.py",
     "check_in": "pages/check_in.py",
 }

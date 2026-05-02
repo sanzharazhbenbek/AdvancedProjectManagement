@@ -51,7 +51,7 @@ def render_page() -> None:
     selected_user = next(user for user in users if user["id"] == selected_user_id)
     st.write(f"**Role:** {role_label(selected_user['role'])}")
     st.write(f"**Status:** {'Active' if selected_user['is_active'] else 'Inactive'}")
-    if selected_user["is_active"] and st.button("Deactivate user", width="stretch"):
+    if selected_user["is_active"] and st.button("Deactivate user", width="stretch", type="secondary"):
         success, message = deactivate_user(current_user, selected_user_id)
         if success:
             flash("warning", message)

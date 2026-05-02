@@ -49,7 +49,7 @@ def render_page() -> None:
     with st.form("check_in_form"):
         ticket_code = st.text_input("Ticket code", placeholder="ES-XXXXXXX")
         qr_payload_text = st.text_area("QR payload text", placeholder="Optional. Paste the scanned QR text here.", height=120)
-        submitted = st.form_submit_button("Validate", width="stretch")
+        submitted = st.form_submit_button("Validate", width="stretch", type="primary")
 
     if submitted:
         st.session_state[CHECK_IN_STATE_KEY] = validate_ticket_for_check_in(
@@ -68,7 +68,9 @@ def render_page() -> None:
         st.success(result["message"])
         st.write(f"**Attendee:** {result['attendee_name']} • {result['attendee_email']}")
         st.write(f"**Event:** {result['event_title']}")
-        if st.button("Check in now", width="stretch"):
+        if result.get("seat_label"):
+            st.write(f"**Seat:** {result['seat_label']}")
+        if st.button("Check in now", width="stretch", type="primary"):
             success, message = check_in_ticket(current_user, result["ticket_id"])
             if success:
                 flash("success", message)

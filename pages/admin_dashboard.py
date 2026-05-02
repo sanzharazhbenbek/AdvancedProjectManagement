@@ -39,18 +39,20 @@ def render_page() -> None:
             {"label": "Events", "value": dashboard["metrics"]["total_events"]},
             {"label": "Bookings", "value": dashboard["metrics"]["total_bookings"]},
             {"label": "Revenue", "value": format_kzt(dashboard["metrics"]["revenue_kzt"])},
+            {"label": "Available seats", "value": dashboard["metrics"]["available_seats"]},
+            {"label": "Reserved seats", "value": dashboard["metrics"]["reserved_seats"]},
         ]
     )
 
     action_columns = st.columns(3, gap="medium")
     with action_columns[0]:
-        if st.button("Manage users", width="stretch"):
+        if st.button("Manage users", width="stretch", type="secondary"):
             navigate_to(ROUTE_TO_PAGE["manage_users"], route="manage_users")
     with action_columns[1]:
-        if st.button("Manage events", width="stretch"):
+        if st.button("Manage events", width="stretch", type="secondary"):
             navigate_to(ROUTE_TO_PAGE["manage_events"], route="manage_events")
     with action_columns[2]:
-        if st.button("Open reports", width="stretch"):
+        if st.button("Open reports", width="stretch", type="primary"):
             navigate_to(ROUTE_TO_PAGE["admin_reports"], route="admin_reports")
 
     st.subheader("Recent bookings")
