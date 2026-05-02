@@ -5,7 +5,7 @@ import streamlit as st
 from components.layout import bootstrap_page, render_empty_state, render_page_header
 from components.sidebar import render_sidebar
 from core.navigation import ROUTE_TO_PAGE
-from core.session import flash, navigate_to
+from core.session import flash, get_query_param, navigate_to
 from services.auth_service import get_current_user
 from services.booking_service import check_in_ticket, validate_ticket_for_check_in
 from services.event_service import list_all_events_for_admin, list_organizer_events
@@ -87,7 +87,7 @@ def render_page() -> None:
 
 
 def _read_event_id() -> int | None:
-    raw = st.query_params.get("event_id")
+    raw = get_query_param("event_id")
     return int(raw) if raw else None
 
 

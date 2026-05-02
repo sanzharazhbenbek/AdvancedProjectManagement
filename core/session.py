@@ -13,6 +13,7 @@ def initialize_session_state() -> None:
     st.session_state.setdefault(settings.session_selected_event_key, None)
     st.session_state.setdefault(settings.session_selected_booking_key, None)
     st.session_state.setdefault(settings.session_selected_ticket_key, None)
+    st.session_state.setdefault(settings.session_route_params_key, {})
 
 
 def set_user_id(user_id: int) -> None:
@@ -77,11 +78,30 @@ def get_selected_ticket() -> int | None:
 
 
 def set_query_params(**params: Any) -> None:
+    stored_params: dict[str, str] = {}
     st.query_params.clear()
     for key, value in params.items():
         if value is None:
             continue
-        st.query_params[key] = str(value)
+        stored_value = str(value)
+        stored_params[key] = stored_value
+        st.query_params[key] = stored_value
+    st.session_state[settings.session_route_params_key] = stored_params
+
+
+def sync_query_params_to_session() -> None:
+    st.session_state[settings.session_route_params_key] = {key: str(st.query_params.get(key)) for key in st.query_params}
+
+
+def get_query_param(name: str, default: str | None = None) -> str | None:
+    raw_value = st.query_params.get(name)
+    if raw_value not in {None, ""}:
+        return str(raw_value)
+    stored_params = st.session_state.get(settings.session_route_params_key, {})
+    stored_value = stored_params.get(name)
+    if stored_value not in {None, ""}:
+        return str(stored_value)
+    return default
 
 
 def navigate_to(page: str, **params: Any) -> None:

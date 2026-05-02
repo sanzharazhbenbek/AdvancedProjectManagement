@@ -7,7 +7,7 @@ import streamlit as st
 from components.layout import bootstrap_page, render_page_header, render_status_pills
 from components.sidebar import render_sidebar
 from core.navigation import ROUTE_TO_PAGE
-from core.session import flash, get_selected_ticket, navigate_to, remember_redirect
+from core.session import flash, get_query_param, get_selected_ticket, navigate_to, remember_redirect
 from services.auth_service import get_current_user
 from services.booking_service import get_ticket_detail
 from services.qr_service import generate_qr_image
@@ -86,7 +86,7 @@ def render_page() -> None:
 
 
 def _read_ticket_id() -> int | None:
-    raw = st.query_params.get("ticket_id")
+    raw = get_query_param("ticket_id")
     if raw:
         return int(raw)
     return get_selected_ticket()

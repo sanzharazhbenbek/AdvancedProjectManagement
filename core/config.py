@@ -19,6 +19,7 @@ class Settings:
     session_selected_event_key: str = "eventsphere_selected_event"
     session_selected_booking_key: str = "eventsphere_selected_booking"
     session_selected_ticket_key: str = "eventsphere_selected_ticket"
+    session_route_params_key: str = "eventsphere_route_query_params"
 
     @property
     def base_dir(self) -> Path:

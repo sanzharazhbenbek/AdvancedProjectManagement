@@ -6,7 +6,7 @@ from components.layout import bootstrap_page, render_empty_state, render_page_he
 from components.sidebar import render_sidebar
 from components.tables import render_attendee_table, render_event_management_table, render_seat_table
 from core.navigation import ROUTE_TO_PAGE
-from core.session import flash, navigate_to
+from core.session import flash, get_query_param, navigate_to
 from services.auth_service import get_current_user
 from services.event_service import cancel_event, get_event_seat_inventory, list_all_events_for_admin, list_event_attendees
 from utils.formatters import format_datetime, format_kzt, format_percent
@@ -90,7 +90,7 @@ def render_page() -> None:
 
 
 def _read_event_id(events: list[dict]) -> int | None:
-    raw = st.query_params.get("event_id")
+    raw = get_query_param("event_id")
     if raw is None:
         return None
     event_id = int(raw)

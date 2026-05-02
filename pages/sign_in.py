@@ -41,17 +41,4 @@ def render_page() -> None:
                 navigate_to(ROUTE_TO_PAGE[route], route=route)
         for error in errors:
             st.error(error)
-
-    with st.expander("Seed accounts"):
-        st.code(
-            "\n".join(
-                [
-                    "Admin: admin@eventsphere.local / Admin123!",
-                    "Organizer: organizer@eventsphere.local / Organizer123!",
-                    "User: user@eventsphere.local / User123!",
-                ]
-            )
-        )
-
-
 render_page()

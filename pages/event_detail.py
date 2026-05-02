@@ -5,7 +5,7 @@ import streamlit as st
 from components.layout import bootstrap_page, render_page_header, render_status_pills
 from components.sidebar import render_sidebar
 from core.navigation import ROUTE_TO_PAGE
-from core.session import flash, get_selected_event, navigate_to, remember_redirect, set_selected_booking, set_selected_event
+from core.session import flash, get_query_param, get_selected_event, navigate_to, remember_redirect, set_selected_booking, set_selected_event
 from services.auth_service import get_current_user
 from services.booking_service import create_pending_booking
 from services.event_service import get_event_detail, get_event_seat_inventory
@@ -121,24 +121,24 @@ def _render_booking_panel(event: dict, current_user: dict) -> None:
     selected_row = st.selectbox("Row", options=row_options, key=f"seat-row-{event['id']}")
     row_payload = next(row for row in category_payload["rows"] if row["row_label"] == selected_row)
 
-    selected_seat_id = st.session_state.get(f"eventsphere_selected_seat_{event['id']}")
-    _render_seat_grid(event["id"], category_payload["rows"], selected_seat_id)
+    selected_seat_key = f"eventsphere_selected_seat_{event['id']}"
+    selected_seat_id = st.session_state.get(selected_seat_key)
+    row_seat_lookup = {seat["id"]: seat for seat in row_payload["seats"]}
+    if selected_seat_id not in row_seat_lookup or row_seat_lookup[selected_seat_id]["status"] != "available":
+        st.session_state[selected_seat_key] = None
+        selected_seat_id = None
 
     available_seats = [seat for seat in row_payload["seats"] if seat["status"] == "available"]
+    _render_seat_grid(event["id"], row_payload, selected_seat_id)
+    selected_seat_id = st.session_state.get(selected_seat_key)
+    selected_seat = row_seat_lookup.get(selected_seat_id) if selected_seat_id in row_seat_lookup else None
+
     if not available_seats:
         st.warning("There are no available seats left in this row. Choose a different row.")
         return
-
-    selected_seat_id = st.selectbox(
-        "Seat number",
-        options=[seat["id"] for seat in available_seats],
-        format_func=lambda value: next(
-            f"Seat {seat['seat_number']} • {format_kzt(seat['price_kzt'])}" for seat in available_seats if seat["id"] == value
-        ),
-        key=f"seat-number-{event['id']}",
-    )
-    st.session_state[f"eventsphere_selected_seat_{event['id']}"] = selected_seat_id
-    selected_seat = next(seat for seat in available_seats if seat["id"] == selected_seat_id)
+    if selected_seat is None:
+        st.info("Choose one available seat button to continue.")
+        return
 
     st.markdown("### Selected seat summary")
     st.write(f"**Event:** {event['title']}")
@@ -154,24 +154,35 @@ def _render_booking_panel(event: dict, current_user: dict) -> None:
         if booking and booking.get("ticket_id"):
             navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=booking["ticket_id"])
         if booking and booking["status"] == "pending_payment":
-            flash("success", "Seat reserved. Continue with the sandbox payment on the next screen.")
+            flash("success", "Seat reserved. Continue with the payment on the next screen.")
             set_selected_booking(booking["booking_id"])
             navigate_to(ROUTE_TO_PAGE["payment"], route="payment", booking_id=booking["booking_id"])
 
 
-def _render_seat_grid(event_id: int, rows: list[dict], selected_seat_id: int | None) -> None:
+def _render_seat_grid(event_id: int, row_payload: dict, selected_seat_id: int | None) -> None:
     st.markdown("### Seat map")
-    for row in rows:
-        seat_labels = []
-        for seat in row["seats"]:
+    st.write(f"**Row {row_payload['row_label']}**")
+    seats = row_payload["seats"]
+    chunk_size = 5
+    for start_index in range(0, len(seats), chunk_size):
+        seat_chunk = seats[start_index : start_index + chunk_size]
+        columns = st.columns(len(seat_chunk), gap="small")
+        for column, seat in zip(columns, seat_chunk):
             status = seat["status"]
-            if selected_seat_id == seat["id"]:
-                status = "selected"
-            seat_labels.append(
-                f"<span class='pill pill-{status}' style='margin-right:0.25rem;'>"
-                f"{row['row_label']}-{seat['seat_number']}</span>"
-            )
-        st.markdown(f"**Row {row['row_label']}**<br>{''.join(seat_labels)}", unsafe_allow_html=True)
+            is_selected = selected_seat_id == seat["id"]
+            button_type = "primary" if is_selected else "secondary"
+            button_disabled = status != "available"
+            with column:
+                if st.button(
+                    f"{seat['row_label']}-{seat['seat_number']}",
+                    key=f"seat-button-{event_id}-{seat['id']}",
+                    width="stretch",
+                    type=button_type,
+                    disabled=button_disabled,
+                ):
+                    st.session_state[f"eventsphere_selected_seat_{event_id}"] = seat["id"]
+                status_label = "Selected" if is_selected else status.replace("_", " ").title()
+                st.caption(status_label)
 
 
 def _render_seat_legend() -> None:
@@ -187,7 +198,7 @@ def _render_seat_legend() -> None:
 
 
 def _read_event_id() -> int | None:
-    raw = st.query_params.get("event_id")
+    raw = get_query_param("event_id")
     if raw:
         return int(raw)
     return get_selected_event()

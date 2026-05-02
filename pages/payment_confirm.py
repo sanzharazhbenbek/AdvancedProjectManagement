@@ -5,7 +5,7 @@ import streamlit as st
 from components.layout import bootstrap_page, render_page_header, render_status_pills
 from components.sidebar import render_sidebar
 from core.navigation import ROUTE_TO_PAGE
-from core.session import flash, navigate_to
+from core.session import flash, get_query_param, navigate_to
 from services.auth_service import get_current_user
 from services.payment_service import cancel_payment_with_token, confirm_payment_with_token, get_payment_confirmation_context
 from utils.date_utils import format_countdown
@@ -13,11 +13,12 @@ from utils.formatters import format_datetime, format_kzt, seat_label
 
 
 def render_page() -> None:
-    bootstrap_page("Confirm Payment")
+    bootstrap_page("Confirm Payment", sidebar_state="collapsed")
     current_user = get_current_user()
-    render_sidebar(current_user)
+    if current_user is not None:
+        render_sidebar(current_user)
 
-    token = str(st.query_params.get("token", "")).strip()
+    token = str(get_query_param("token", "") or "").strip()
     if not token:
         st.error("Payment token not found.")
         return
@@ -28,8 +29,8 @@ def render_page() -> None:
         return
 
     render_page_header(
-        "Confirm sandbox payment",
-        "Sandbox simulation. No real money is charged.",
+        "Confirm payment",
+        "Review the booking details and finish the payment confirmation on this page.",
         stats=[
             {"label": "Event", "value": context["event"]["title"]},
             {"label": "Amount", "value": format_kzt(context["amount_kzt"])},
@@ -37,8 +38,7 @@ def render_page() -> None:
             {"label": "Deadline", "value": format_countdown(context["payment_deadline"])},
         ],
     )
-    st.warning("Sandbox simulation. No real money is charged.")
-    render_status_pills("Kaspi Sandbox", context["booking_status"])
+    render_status_pills(status=context["booking_status"])
 
     st.write(f"**Event:** {context['event']['title']}")
     st.write(f"**Date and time:** {format_datetime(context['event']['event_datetime'])}")
