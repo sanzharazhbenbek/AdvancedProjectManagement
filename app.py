@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import uvicorn
+import streamlit as st
 
-from app.config import settings
+from components.layout import bootstrap_page
+from core.navigation import page_for_route
+
 
 def main() -> None:
-    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=settings.reload)
+    bootstrap_page("EventSphere", sidebar_state="collapsed")
+    route = str(st.query_params.get("route", "discover"))
+    st.switch_page(page_for_route(route))
 
 
 if __name__ == "__main__":
