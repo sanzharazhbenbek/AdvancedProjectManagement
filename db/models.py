@@ -61,6 +61,7 @@ class Booking(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
     seat_id: Mapped[int | None] = mapped_column(ForeignKey("seats.id"), nullable=True, index=True)
+    booking_group_token: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_payment")
     amount_kzt: Mapped[int] = mapped_column(Integer, nullable=False)
     customer_email: Mapped[str | None] = mapped_column(String(180), nullable=True)

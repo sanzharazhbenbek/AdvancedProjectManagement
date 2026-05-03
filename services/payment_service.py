@@ -4,7 +4,14 @@ import secrets
 from typing import Any
 
 from db.database import session_scope
-from db.repositories import BookingRepository, PaymentSimulationRepository, TicketRepository, get_available_counts_by_event, get_checked_in_counts_by_event, get_paid_counts_by_event
+from db.repositories import (
+    BookingRepository,
+    PaymentSimulationRepository,
+    TicketRepository,
+    get_available_counts_by_event,
+    get_checked_in_counts_by_event,
+    get_paid_counts_by_event,
+)
 from services.booking_service import _expire_pending_bookings_in_session
 from services.delivery_service import create_ticket_delivery
 from services.event_service import derive_event_runtime_status, serialize_event
@@ -16,38 +23,36 @@ from utils.date_utils import now_local
 def get_payment_context(booking_id: int) -> tuple[dict[str, Any] | None, str | None]:
     with session_scope() as session:
         _expire_pending_bookings_in_session(session)
-        booking = BookingRepository(session).get_by_id(booking_id)
-        if booking is None:
+        requested_booking = BookingRepository(session).get_by_id(booking_id)
+        if requested_booking is None:
             return None, "Booking not found."
 
-        payment = _ensure_payment(session, booking.id)
-        sold_map = get_paid_counts_by_event(session, [booking.event_id])
-        checked_map = get_checked_in_counts_by_event(session, [booking.event_id])
-        available_map = get_available_counts_by_event(session, [booking.event_id])
+        group_bookings = _load_group_bookings(session, requested_booking)
+        primary_booking = _select_primary_booking(group_bookings, requested_booking)
+        payment = _ensure_payment(session, primary_booking.id)
+        sold_map = get_paid_counts_by_event(session, [primary_booking.event_id])
+        checked_map = get_checked_in_counts_by_event(session, [primary_booking.event_id])
+        available_map = get_available_counts_by_event(session, [primary_booking.event_id])
         event_snapshot = serialize_event(
-            booking.event,
-            sold_map.get(booking.event_id, 0),
-            checked_map.get(booking.event_id, 0),
-            available_count=available_map.get(booking.event_id, 0),
+            primary_booking.event,
+            sold_map.get(primary_booking.event_id, 0),
+            checked_map.get(primary_booking.event_id, 0),
+            available_count=available_map.get(primary_booking.event_id, 0),
         )
+        ticket_ids = [booking.ticket.id for booking in group_bookings if booking.ticket is not None]
         return (
             {
-                "booking_id": booking.id,
-                "booking_status": booking.status,
-                "amount_kzt": booking.amount_kzt,
-                "created_at": booking.created_at,
-                "payment_deadline": booking.payment_deadline or booking.expires_at,
-                "paid_at": booking.paid_at,
-                "ticket_id": booking.ticket.id if booking.ticket else None,
-                "customer_email": booking.customer_email,
-                "seat": None
-                if booking.seat is None
-                else {
-                    "category": booking.seat.category,
-                    "row_label": booking.seat.row_label,
-                    "seat_number": booking.seat.seat_number,
-                    "price_kzt": booking.seat.price_kzt,
-                },
+                "booking_id": primary_booking.id,
+                "booking_status": primary_booking.status,
+                "ticket_count": len(group_bookings),
+                "ticket_ids": ticket_ids,
+                "ticket_id": ticket_ids[0] if ticket_ids else None,
+                "amount_kzt": sum(booking.amount_kzt for booking in group_bookings),
+                "created_at": primary_booking.created_at,
+                "payment_deadline": primary_booking.payment_deadline or primary_booking.expires_at,
+                "paid_at": primary_booking.paid_at,
+                "customer_email": primary_booking.customer_email,
+                "seats": _serialize_group_seats(group_bookings),
                 "event": event_snapshot,
                 "payment": {
                     "id": payment.id,
@@ -70,36 +75,34 @@ def get_payment_confirmation_context(token: str) -> tuple[dict[str, Any] | None,
         if booking is None:
             return None, "Invalid or expired payment token."
 
-        payment = _ensure_payment(session, booking.id)
+        group_bookings = _load_group_bookings(session, booking)
+        primary_booking = _select_primary_booking(group_bookings, booking)
+        payment = _ensure_payment(session, primary_booking.id)
+        ticket_ids = [group_booking.ticket.id for group_booking in group_bookings if group_booking.ticket is not None]
         return (
             {
-                "booking_id": booking.id,
+                "booking_id": primary_booking.id,
                 "token": token,
-                "booking_status": booking.status,
-                "customer_email": booking.customer_email,
-                "amount_kzt": booking.amount_kzt,
-                "payment_deadline": booking.payment_deadline or booking.expires_at,
+                "booking_status": primary_booking.status,
+                "customer_email": primary_booking.customer_email,
+                "amount_kzt": sum(group_booking.amount_kzt for group_booking in group_bookings),
+                "ticket_count": len(group_bookings),
+                "ticket_ids": ticket_ids,
+                "ticket_id": ticket_ids[0] if ticket_ids else None,
+                "payment_deadline": primary_booking.payment_deadline or primary_booking.expires_at,
                 "event": {
-                    "id": booking.event.id,
-                    "title": booking.event.title,
-                    "city": booking.event.city,
-                    "venue": booking.event.venue,
-                    "event_datetime": booking.event.event_datetime,
+                    "id": primary_booking.event.id,
+                    "title": primary_booking.event.title,
+                    "city": primary_booking.event.city,
+                    "venue": primary_booking.event.venue,
+                    "event_datetime": primary_booking.event.event_datetime,
                 },
-                "seat": None
-                if booking.seat is None
-                else {
-                    "category": booking.seat.category,
-                    "row_label": booking.seat.row_label,
-                    "seat_number": booking.seat.seat_number,
-                    "price_kzt": booking.seat.price_kzt,
-                },
+                "seats": _serialize_group_seats(group_bookings),
                 "payment": {
                     "status": payment.status,
                     "payment_reference": payment.payment_reference,
                     "confirmed_at": payment.confirmed_at,
                 },
-                "ticket_id": booking.ticket.id if booking.ticket else None,
             },
             None,
         )
@@ -108,107 +111,125 @@ def get_payment_confirmation_context(token: str) -> tuple[dict[str, Any] | None,
 def confirm_payment_with_token(token: str) -> tuple[dict[str, Any] | None, list[str]]:
     with session_scope() as session:
         _expire_pending_bookings_in_session(session)
-        booking = BookingRepository(session).get_by_confirmation_token(token)
-        if booking is None:
+        token_booking = BookingRepository(session).get_by_confirmation_token(token)
+        if token_booking is None:
             return None, ["Invalid or expired payment token."]
 
-        payment = _ensure_payment(session, booking.id)
-        if booking.status == "cancelled":
+        group_bookings = _load_group_bookings(session, token_booking)
+        primary_booking = _select_primary_booking(group_bookings, token_booking)
+        payment = _ensure_payment(session, primary_booking.id)
+
+        if primary_booking.status == "cancelled":
             payment.status = "cancelled"
+            session.add(payment)
             return None, ["This payment has been cancelled."]
-        if booking.status == "expired":
+        if primary_booking.status == "expired":
             payment.status = "failed"
+            session.add(payment)
             return None, ["The payment deadline has expired."]
-        if booking.status == "paid" and booking.ticket is not None:
-            return {"ticket_id": booking.ticket.id, "booking_id": booking.id}, []
-        if booking.seat is None:
-            return None, ["No seat is attached to this booking."]
 
-        sold_count = get_paid_counts_by_event(session, [booking.event_id]).get(booking.event_id, 0)
-        available_count = get_available_counts_by_event(session, [booking.event_id]).get(booking.event_id, 0)
-        runtime_status = derive_event_runtime_status(booking.event, sold_count, available_count)
+        ticket_ids = [booking.ticket.id for booking in group_bookings if booking.ticket is not None]
+        if primary_booking.status == "paid" and len(ticket_ids) == len(group_bookings):
+            return {
+                "ticket_id": ticket_ids[0] if ticket_ids else None,
+                "ticket_ids": ticket_ids,
+                "ticket_count": len(ticket_ids),
+                "booking_id": primary_booking.id,
+            }, []
+
+        sold_count = get_paid_counts_by_event(session, [primary_booking.event_id]).get(primary_booking.event_id, 0)
+        available_count = get_available_counts_by_event(session, [primary_booking.event_id]).get(primary_booking.event_id, 0)
+        runtime_status = derive_event_runtime_status(primary_booking.event, sold_count, available_count)
         if runtime_status in {"past", "cancelled"}:
-            booking.status = "cancelled"
-            payment.status = "cancelled"
-            release_seat(session, booking.seat_id)
+            _close_pending_group(session, group_bookings, status="cancelled", payment_status="cancelled")
             return None, ["This event is no longer available for ticketing."]
-        if booking.seat.status != "reserved_pending_payment" or booking.seat.booking_id != booking.id:
-            return None, ["This seat is no longer reserved for this payment."]
 
-        other_paid = BookingRepository(session).get_paid_for_user_event(booking.user_id, booking.event_id)
-        if other_paid is not None and other_paid.id != booking.id:
-            booking.status = "cancelled"
-            payment.status = "cancelled"
-            release_seat(session, booking.seat_id)
-            return None, ["A paid ticket already exists for this attendee."]
+        for booking in group_bookings:
+            if booking.status not in {"pending_payment", "paid"}:
+                return None, ["This booking group can no longer be confirmed."]
+            if booking.seat is None:
+                return None, ["One of the selected seats is missing from this booking."]
+            if booking.status == "pending_payment" and (
+                booking.seat.status != "reserved_pending_payment" or booking.seat.booking_id != booking.id
+            ):
+                return None, ["One of the selected seats is no longer reserved for this payment."]
 
-        ticket = booking.ticket
-        if ticket is None:
-            ticket = TicketRepository(session).create(
-                booking_id=booking.id,
-                user_id=booking.user_id,
-                event_id=booking.event_id,
-                seat_id=booking.seat_id,
-                ticket_code=f"ES-{secrets.token_hex(4).upper()}",
-                qr_payload="pending",
-                category=booking.seat.category,
-                row_label=booking.seat.row_label,
-                seat_number=booking.seat.seat_number,
-                price_kzt=booking.seat.price_kzt,
-                status="valid",
-            )
+        paid_at = now_local()
+        created_ticket_ids: list[int] = []
+        for booking in group_bookings:
+            ticket = booking.ticket
+            if ticket is None:
+                ticket = TicketRepository(session).create(
+                    booking_id=booking.id,
+                    user_id=booking.user_id,
+                    event_id=booking.event_id,
+                    seat_id=booking.seat_id,
+                    ticket_code=f"ES-{secrets.token_hex(4).upper()}",
+                    qr_payload="pending",
+                    category=booking.seat.category if booking.seat else None,
+                    row_label=booking.seat.row_label if booking.seat else None,
+                    seat_number=booking.seat.seat_number if booking.seat else None,
+                    price_kzt=booking.seat.price_kzt if booking.seat else booking.amount_kzt,
+                    status="valid",
+                )
+                session.flush()
+                ticket.qr_payload = build_ticket_payload(ticket.id, ticket.ticket_code)
+
+            booking.status = "paid"
+            booking.paid_at = paid_at
+            mark_seat_sold(session, booking.seat_id, booking.id)
+            session.add_all([booking, ticket])
             session.flush()
-            ticket.qr_payload = build_ticket_payload(ticket.id, ticket.ticket_code)
+            create_ticket_delivery(session, ticket)
+            created_ticket_ids.append(ticket.id)
 
-        booking.status = "paid"
-        booking.paid_at = now_local()
         payment.status = "confirmed"
-        payment.confirmed_at = booking.paid_at
-        mark_seat_sold(session, booking.seat_id, booking.id)
-        session.add_all([booking, payment, ticket])
-        session.flush()
-        create_ticket_delivery(session, ticket)
-        return {"ticket_id": ticket.id, "booking_id": booking.id}, []
+        payment.confirmed_at = paid_at
+        session.add(payment)
+        return {
+            "ticket_id": created_ticket_ids[0] if created_ticket_ids else None,
+            "ticket_ids": created_ticket_ids,
+            "ticket_count": len(created_ticket_ids),
+            "booking_id": primary_booking.id,
+        }, []
 
 
 def cancel_payment(booking_id: int) -> tuple[bool, str]:
     with session_scope() as session:
-        booking = BookingRepository(session).get_by_id(booking_id)
-        if booking is None:
+        requested_booking = BookingRepository(session).get_by_id(booking_id)
+        if requested_booking is None:
             return False, "Booking not found."
 
-        payment = _ensure_payment(session, booking.id)
-        if booking.status == "paid":
+        group_bookings = _load_group_bookings(session, requested_booking)
+        primary_booking = _select_primary_booking(group_bookings, requested_booking)
+        payment = _ensure_payment(session, primary_booking.id)
+        if primary_booking.status == "paid":
             return False, "Paid bookings cannot be cancelled."
-        if booking.status in {"cancelled", "expired"}:
+        if primary_booking.status in {"cancelled", "expired"}:
             return False, "This booking is already closed."
 
-        booking.status = "cancelled"
-        booking.cancelled_at = now_local()
-        payment.status = "cancelled"
-        release_seat(session, booking.seat_id)
-        session.add_all([booking, payment])
+        _close_pending_group(session, group_bookings, status="cancelled", payment_status="cancelled")
+        session.add(payment)
         return True, "Booking cancelled."
 
 
 def cancel_payment_with_token(token: str) -> tuple[bool, str]:
     with session_scope() as session:
-        booking = BookingRepository(session).get_by_confirmation_token(token)
-        if booking is None:
+        token_booking = BookingRepository(session).get_by_confirmation_token(token)
+        if token_booking is None:
             return False, "Invalid or expired payment token."
 
-        payment = _ensure_payment(session, booking.id)
-        if booking.status == "paid":
+        group_bookings = _load_group_bookings(session, token_booking)
+        primary_booking = _select_primary_booking(group_bookings, token_booking)
+        payment = _ensure_payment(session, primary_booking.id)
+        if primary_booking.status == "paid":
             return False, "This payment has already been confirmed."
-        if booking.status in {"cancelled", "expired"}:
+        if primary_booking.status in {"cancelled", "expired"}:
             return False, "This booking is already closed."
 
-        booking.status = "cancelled"
-        booking.cancelled_at = now_local()
-        payment.status = "cancelled"
-        release_seat(session, booking.seat_id)
-        session.add_all([booking, payment])
-        return True, "Payment cancelled and seat released."
+        _close_pending_group(session, group_bookings, status="cancelled", payment_status="cancelled")
+        session.add(payment)
+        return True, "Payment cancelled and seats released."
 
 
 def _ensure_payment(session, booking_id: int):
@@ -238,3 +259,48 @@ def _ensure_payment(session, booking_id: int):
     )
     session.add(payment)
     return payment
+
+
+def _load_group_bookings(session, booking) -> list:
+    if booking.booking_group_token:
+        bookings = BookingRepository(session).list_for_group_token(booking.booking_group_token)
+        if bookings:
+            return bookings
+    return [booking]
+
+
+def _select_primary_booking(bookings: list, fallback):
+    for booking in bookings:
+        if booking.payment_confirmation_token or booking.payment is not None:
+            return booking
+    return fallback if fallback in bookings else sorted(bookings, key=lambda item: (item.created_at, item.id))[0]
+
+
+def _serialize_group_seats(group_bookings: list) -> list[dict[str, Any]]:
+    return [
+        {
+            "seat_id": booking.seat_id,
+            "category": booking.seat.category if booking.seat else None,
+            "row_label": booking.seat.row_label if booking.seat else None,
+            "seat_number": booking.seat.seat_number if booking.seat else None,
+            "price_kzt": booking.seat.price_kzt if booking.seat else booking.amount_kzt,
+            "ticket_id": booking.ticket.id if booking.ticket else None,
+        }
+        for booking in sorted(group_bookings, key=lambda item: ((item.seat.row_label if item.seat else ""), (item.seat.seat_number if item.seat else 0), item.id))
+    ]
+
+
+def _close_pending_group(session, group_bookings: list, *, status: str, payment_status: str) -> None:
+    timestamp = now_local()
+    primary_booking = _select_primary_booking(group_bookings, group_bookings[0])
+    if primary_booking.payment is not None:
+        primary_booking.payment.status = payment_status
+        session.add(primary_booking.payment)
+
+    for booking in group_bookings:
+        if booking.status == "paid":
+            continue
+        booking.status = status
+        booking.cancelled_at = timestamp if status == "cancelled" else booking.cancelled_at
+        release_seat(session, booking.seat_id)
+        session.add(booking)

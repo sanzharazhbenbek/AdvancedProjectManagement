@@ -48,13 +48,14 @@ def serialize_event(
     event: Event,
     sold_count: int,
     checked_in_count: int,
-    viewer_booking: Booking | None = None,
+    viewer_booking: Booking | dict[str, Any] | None = None,
     *,
     available_count: int | None = None,
     reserved_count: int = 0,
 ) -> dict[str, Any]:
     remaining = available_count if available_count is not None else max(event.capacity - sold_count, 0)
     runtime_status = derive_event_runtime_status(event, sold_count, remaining)
+    viewer_context = _normalize_viewer_context(viewer_booking)
     return {
         "id": event.id,
         "slug": event.slug,
@@ -78,17 +79,14 @@ def serialize_event(
         "reserved_count": reserved_count,
         "fill_rate": (sold_count / event.capacity) if event.capacity else 0,
         "can_book": runtime_status == "upcoming" and remaining > 0,
-        "viewer_has_paid_ticket": bool(viewer_booking and viewer_booking.status == "paid"),
-        "viewer_ticket_id": viewer_booking.ticket.id if viewer_booking and viewer_booking.ticket else None,
-        "viewer_pending_booking_id": viewer_booking.id if viewer_booking and viewer_booking.status == "pending_payment" else None,
-        "viewer_pending_seat": None
-        if not viewer_booking or not viewer_booking.seat
-        else {
-            "category": viewer_booking.seat.category,
-            "row_label": viewer_booking.seat.row_label,
-            "seat_number": viewer_booking.seat.seat_number,
-            "price_kzt": viewer_booking.seat.price_kzt,
-        },
+        "viewer_has_paid_ticket": viewer_context["viewer_has_paid_ticket"],
+        "viewer_paid_ticket_count": viewer_context["viewer_paid_ticket_count"],
+        "viewer_ticket_id": viewer_context["viewer_ticket_id"],
+        "viewer_pending_booking_id": viewer_context["viewer_pending_booking_id"],
+        "viewer_pending_ticket_count": viewer_context["viewer_pending_ticket_count"],
+        "viewer_pending_total_amount_kzt": viewer_context["viewer_pending_total_amount_kzt"],
+        "viewer_pending_seat": viewer_context["viewer_pending_seat"],
+        "viewer_pending_seats": viewer_context["viewer_pending_seats"],
     }
 
 
@@ -107,11 +105,17 @@ def list_discover_events(filters: dict[str, Any] | None = None, viewer_id: int |
         checked_map = get_checked_in_counts_by_event(session, event_ids)
         available_map = get_available_counts_by_event(session, event_ids)
         reserved_map = get_reserved_counts_by_event(session, event_ids)
-        viewer_bookings: dict[int, Booking] = {}
+        viewer_bookings: dict[int, dict[str, Any]] = {}
         if viewer_id is not None:
             bookings = BookingRepository(session).list_for_user(viewer_id)
+            bookings_by_event: dict[int, list[Booking]] = {}
+            for booking in bookings:
+                if booking.status not in {"paid", "pending_payment"}:
+                    continue
+                bookings_by_event.setdefault(booking.event_id, []).append(booking)
             viewer_bookings = {
-                booking.event_id: booking for booking in bookings if booking.status in {"paid", "pending_payment"}
+                event_id: _build_viewer_booking_context(bookings_for_event)
+                for event_id, bookings_for_event in bookings_by_event.items()
             }
 
         snapshots = [
@@ -188,8 +192,10 @@ def get_event_detail(event_id: int, viewer_id: int | None = None) -> dict[str, A
         reserved_map = get_reserved_counts_by_event(session, [event.id])
         viewer_booking = None
         if viewer_id is not None:
-            bookings = BookingRepository(session).list_for_user(viewer_id)
-            viewer_booking = next((booking for booking in bookings if booking.event_id == event.id and booking.status in {"paid", "pending_payment"}), None)
+            bookings = BookingRepository(session).list_for_user_event(viewer_id, event.id)
+            viewer_booking = _build_viewer_booking_context(
+                [booking for booking in bookings if booking.status in {"paid", "pending_payment"}]
+            )
         return serialize_event(
             event,
             sold_map.get(event.id, 0),
@@ -397,30 +403,34 @@ def list_event_attendees(actor: dict[str, Any], event_id: int) -> tuple[list[dic
             return [], "You are not allowed to view attendees for this event."
 
         tickets = TicketRepository(session).list_for_event(event_id)
-        rows = [
-            {
-                "ticket_id": ticket.id,
-                "ticket_code": ticket.ticket_code,
-                "attendee_name": ticket.user.full_name,
-                "attendee_email": ticket.user.email,
-                "status": ticket.status,
-                "checked_in_at": ticket.checked_in_at,
-                "booking_id": ticket.booking_id,
-                "payment_status": ticket.booking.payment.status if ticket.booking and ticket.booking.payment else None,
-                "seat_category": ticket.category,
-                "row_label": ticket.row_label,
-                "seat_number": ticket.seat_number,
-                "price_kzt": ticket.price_kzt,
-            }
-            for ticket in tickets
-        ]
+        booking_primary_map = _build_group_primary_map([ticket.booking for ticket in tickets if ticket.booking is not None])
+        rows = []
+        for ticket in tickets:
+            payment_booking = _resolve_group_payment_booking(ticket.booking, booking_primary_map) if ticket.booking else None
+            rows.append(
+                {
+                    "ticket_id": ticket.id,
+                    "ticket_code": ticket.ticket_code,
+                    "attendee_name": ticket.user.full_name,
+                    "attendee_email": ticket.user.email,
+                    "status": ticket.status,
+                    "checked_in_at": ticket.checked_in_at,
+                    "booking_id": ticket.booking_id,
+                    "payment_status": payment_booking.payment.status if payment_booking and payment_booking.payment else None,
+                    "seat_category": ticket.category,
+                    "row_label": ticket.row_label,
+                    "seat_number": ticket.seat_number,
+                    "price_kzt": ticket.price_kzt,
+                }
+            )
         return rows, None
 
 
 def list_recent_bookings() -> list[dict[str, Any]]:
     with session_scope() as session:
         bookings = BookingRepository(session).list_recent(limit=12)
-        return [_serialize_booking_row(item) for item in bookings]
+        booking_primary_map = _build_group_primary_map(bookings)
+        return [_serialize_booking_row(item, booking_primary_map) for item in bookings]
 
 
 def list_all_user_rows() -> list[dict[str, Any]]:
@@ -460,9 +470,11 @@ def list_admin_operational_rows() -> dict[str, list[dict[str, Any]]]:
         tickets = TicketRepository(session).list_all()
         email_logs = EmailLogRepository(session).list_all()
         bookings_map = {booking.id: booking for booking in bookings}
+        booking_primary_map = _build_group_primary_map(bookings)
+        booking_group_totals = _build_group_total_map(bookings)
 
         return {
-            "bookings": [_serialize_booking_row(booking) for booking in bookings],
+            "bookings": [_serialize_booking_row(booking, booking_primary_map) for booking in bookings],
             "payments": [
                 {
                     "payment_id": payment.id,
@@ -474,7 +486,9 @@ def list_admin_operational_rows() -> dict[str, list[dict[str, Any]]]:
                     "confirmed_at": payment.confirmed_at,
                     "event_title": payment.booking.event.title if payment.booking and payment.booking.event else None,
                     "user_email": payment.booking.customer_email if payment.booking else None,
-                    "amount_kzt": payment.booking.amount_kzt if payment.booking else None,
+                    "amount_kzt": booking_group_totals.get(_booking_group_key(payment.booking), payment.booking.amount_kzt)
+                    if payment.booking
+                    else None,
                 }
                 for payment in payments
             ],
@@ -535,7 +549,8 @@ def _can_manage_event(actor: dict[str, Any], event: Event) -> bool:
     return actor["role"] == "admin" or event.organizer_id == actor["id"]
 
 
-def _serialize_booking_row(booking: Booking) -> dict[str, Any]:
+def _serialize_booking_row(booking: Booking, booking_primary_map: dict[str, Booking] | None = None) -> dict[str, Any]:
+    payment_booking = _resolve_group_payment_booking(booking, booking_primary_map)
     return {
         "id": booking.id,
         "status": booking.status,
@@ -546,11 +561,125 @@ def _serialize_booking_row(booking: Booking) -> dict[str, Any]:
         "event_title": booking.event.title if booking.event else "Unknown event",
         "user_name": booking.user.full_name if booking.user else "Unknown attendee",
         "user_email": booking.customer_email or (booking.user.email if booking.user else None),
-        "payment_reference": booking.payment.payment_reference if booking.payment else None,
-        "payment_status": booking.payment.status if booking.payment else None,
+        "payment_reference": payment_booking.payment.payment_reference if payment_booking.payment else None,
+        "payment_status": payment_booking.payment.status if payment_booking.payment else None,
         "ticket_id": booking.ticket.id if booking.ticket else None,
         "seat_category": booking.seat.category if booking.seat else None,
         "row_label": booking.seat.row_label if booking.seat else None,
         "seat_number": booking.seat.seat_number if booking.seat else None,
         "payment_deadline": booking.payment_deadline or booking.expires_at,
     }
+
+
+def _normalize_viewer_context(viewer_booking: Booking | dict[str, Any] | None) -> dict[str, Any]:
+    if viewer_booking is None:
+        return {
+            "viewer_has_paid_ticket": False,
+            "viewer_paid_ticket_count": 0,
+            "viewer_ticket_id": None,
+            "viewer_pending_booking_id": None,
+            "viewer_pending_ticket_count": 0,
+            "viewer_pending_total_amount_kzt": 0,
+            "viewer_pending_seat": None,
+            "viewer_pending_seats": [],
+        }
+    if isinstance(viewer_booking, dict):
+        base_context = _normalize_viewer_context(None)
+        base_context.update(viewer_booking)
+        return base_context
+    pending_seat = (
+        {
+            "category": viewer_booking.seat.category,
+            "row_label": viewer_booking.seat.row_label,
+            "seat_number": viewer_booking.seat.seat_number,
+            "price_kzt": viewer_booking.seat.price_kzt,
+        }
+        if viewer_booking.seat
+        else None
+    )
+    return {
+        "viewer_has_paid_ticket": viewer_booking.status == "paid",
+        "viewer_paid_ticket_count": 1 if viewer_booking.status == "paid" else 0,
+        "viewer_ticket_id": viewer_booking.ticket.id if viewer_booking.ticket else None,
+        "viewer_pending_booking_id": viewer_booking.id if viewer_booking.status == "pending_payment" else None,
+        "viewer_pending_ticket_count": 1 if viewer_booking.status == "pending_payment" else 0,
+        "viewer_pending_total_amount_kzt": viewer_booking.amount_kzt if viewer_booking.status == "pending_payment" else 0,
+        "viewer_pending_seat": pending_seat,
+        "viewer_pending_seats": [pending_seat] if pending_seat and viewer_booking.status == "pending_payment" else [],
+    }
+
+
+def _build_viewer_booking_context(bookings: list[Booking]) -> dict[str, Any]:
+    if not bookings:
+        return _normalize_viewer_context(None)
+
+    paid_bookings = [booking for booking in bookings if booking.status == "paid" and booking.ticket is not None]
+    pending_bookings = [booking for booking in bookings if booking.status == "pending_payment"]
+    latest_paid = paid_bookings[0] if paid_bookings else None
+    latest_pending_group = _select_latest_pending_group(pending_bookings)
+    pending_seats = [
+        {
+            "category": booking.seat.category,
+            "row_label": booking.seat.row_label,
+            "seat_number": booking.seat.seat_number,
+            "price_kzt": booking.seat.price_kzt,
+        }
+        for booking in latest_pending_group
+        if booking.seat is not None
+    ]
+    return {
+        "viewer_has_paid_ticket": bool(paid_bookings),
+        "viewer_paid_ticket_count": len(paid_bookings),
+        "viewer_ticket_id": latest_paid.ticket.id if latest_paid and latest_paid.ticket else None,
+        "viewer_pending_booking_id": latest_pending_group[0].id if latest_pending_group else None,
+        "viewer_pending_ticket_count": len(latest_pending_group),
+        "viewer_pending_total_amount_kzt": sum(booking.amount_kzt for booking in latest_pending_group),
+        "viewer_pending_seat": pending_seats[0] if pending_seats else None,
+        "viewer_pending_seats": pending_seats,
+    }
+
+
+def _select_latest_pending_group(bookings: list[Booking]) -> list[Booking]:
+    if not bookings:
+        return []
+    groups: dict[str, list[Booking]] = {}
+    for booking in bookings:
+        groups.setdefault(_booking_group_key(booking), []).append(booking)
+    latest_group = max(
+        groups.values(),
+        key=lambda items: max((item.created_at, item.id) for item in items),
+    )
+    return sorted(latest_group, key=lambda item: (item.created_at, item.id))
+
+
+def _booking_group_key(booking: Booking) -> str:
+    return booking.booking_group_token or f"booking-{booking.id}"
+
+
+def _build_group_primary_map(bookings: list[Booking]) -> dict[str, Booking]:
+    primary_map: dict[str, Booking] = {}
+    for booking in sorted(bookings, key=lambda item: (item.created_at, item.id)):
+        group_key = _booking_group_key(booking)
+        current = primary_map.get(group_key)
+        if current is None or (booking.payment_confirmation_token or booking.payment is not None):
+            primary_map[group_key] = booking
+    return primary_map
+
+
+def _build_group_total_map(bookings: list[Booking]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for booking in bookings:
+        group_key = _booking_group_key(booking)
+        totals[group_key] = totals.get(group_key, 0) + booking.amount_kzt
+    return totals
+
+
+def _resolve_group_payment_booking(
+    booking: Booking,
+    booking_primary_map: dict[str, Booking] | None = None,
+) -> Booking:
+    if booking.payment is not None or booking.booking_group_token is None:
+        return booking
+    if booking_primary_map is None:
+        return booking
+    return booking_primary_map.get(_booking_group_key(booking), booking)

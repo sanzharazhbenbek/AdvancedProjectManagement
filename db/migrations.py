@@ -8,6 +8,7 @@ from db.database import get_engine
 SCHEMA_UPDATES = {
     "bookings": {
         "seat_id": "INTEGER",
+        "booking_group_token": "VARCHAR(120)",
         "payment_deadline": "DATETIME",
         "payment_confirmation_token": "VARCHAR(120)",
         "customer_email": "VARCHAR(180)",

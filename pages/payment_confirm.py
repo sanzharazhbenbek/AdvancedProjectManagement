@@ -34,6 +34,7 @@ def render_page() -> None:
         stats=[
             {"label": "Event", "value": context["event"]["title"]},
             {"label": "Amount", "value": format_kzt(context["amount_kzt"])},
+            {"label": "Tickets", "value": context["ticket_count"]},
             {"label": "Status", "value": context["payment"]["status"].replace("_", " ").title()},
             {"label": "Deadline", "value": format_countdown(context["payment_deadline"])},
         ],
@@ -44,16 +45,17 @@ def render_page() -> None:
     st.write(f"**Date and time:** {format_datetime(context['event']['event_datetime'])}")
     st.write(f"**Venue:** {context['event']['venue']}, {context['event']['city']}")
     st.write(f"**Customer email:** {context['customer_email']}")
-    if context["seat"]:
+    for index, seat in enumerate(context["seats"], start=1):
         st.write(
-            f"**Selected seat:** {seat_label(context['seat']['category'], context['seat']['row_label'], context['seat']['seat_number'])}"
+            f"**Seat {index}:** {seat_label(seat['category'], seat['row_label'], seat['seat_number'])} • {format_kzt(seat['price_kzt'])}"
         )
     st.write(f"**Amount:** {format_kzt(context['amount_kzt'])}")
 
     if context["booking_status"] == "paid" and context["ticket_id"]:
         st.success("This payment has already been confirmed.")
-        if st.button("Open ticket", width="stretch", type="primary"):
-            navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=context["ticket_id"])
+        label = "Open tickets" if context["ticket_count"] > 1 else "Open ticket"
+        if st.button(label, width="stretch", type="primary"):
+            _open_post_payment_destination(context)
         return
 
     if context["booking_status"] in {"cancelled", "expired"}:
@@ -69,8 +71,12 @@ def render_page() -> None:
             for error_message in errors:
                 st.error(error_message)
         elif result is not None:
-            flash("success", "Sandbox payment confirmed and ticket issued.")
-            navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=result["ticket_id"])
+            flash(
+                "success",
+                f"Sandbox payment confirmed and {result['ticket_count']} ticket"
+                f"{'' if result['ticket_count'] == 1 else 's'} issued.",
+            )
+            _open_post_payment_destination(result)
 
     if right.button("Cancel payment", width="stretch", type="secondary"):
         success, message = cancel_payment_with_token(token)
@@ -79,6 +85,13 @@ def render_page() -> None:
             navigate_to(ROUTE_TO_PAGE["payment"], route="payment", booking_id=context["booking_id"])
         else:
             st.error(message)
+
+
+def _open_post_payment_destination(context: dict) -> None:
+    if context["ticket_count"] > 1:
+        navigate_to(ROUTE_TO_PAGE["user_dashboard"], route="user_dashboard")
+        return
+    navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=context["ticket_id"])
 
 
 render_page()

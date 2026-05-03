@@ -108,6 +108,22 @@ class BookingRepository:
         stmt = self._query().where(Booking.event_id.in_(event_ids)).order_by(Booking.created_at.desc())
         return list(self.session.scalars(stmt).unique().all())
 
+    def list_for_group_token(self, group_token: str) -> list[Booking]:
+        stmt = (
+            self._query()
+            .where(Booking.booking_group_token == group_token)
+            .order_by(Booking.created_at.asc(), Booking.id.asc())
+        )
+        return list(self.session.scalars(stmt).unique().all())
+
+    def list_for_user_event(self, user_id: int, event_id: int) -> list[Booking]:
+        stmt = (
+            self._query()
+            .where(Booking.user_id == user_id, Booking.event_id == event_id)
+            .order_by(Booking.created_at.desc(), Booking.id.desc())
+        )
+        return list(self.session.scalars(stmt).unique().all())
+
     def get_paid_for_user_event(self, user_id: int, event_id: int) -> Booking | None:
         stmt = self._query().where(Booking.user_id == user_id, Booking.event_id == event_id, Booking.status == "paid")
         return self.session.scalar(stmt)

@@ -5,9 +5,17 @@ import streamlit as st
 from components.layout import bootstrap_page, render_page_header, render_status_pills
 from components.sidebar import render_sidebar
 from core.navigation import ROUTE_TO_PAGE
-from core.session import flash, get_query_param, get_selected_event, navigate_to, remember_redirect, set_selected_booking, set_selected_event
+from core.session import (
+    flash,
+    get_query_param,
+    get_selected_event,
+    navigate_to,
+    remember_redirect,
+    set_selected_booking,
+    set_selected_event,
+)
 from services.auth_service import get_current_user
-from services.booking_service import create_pending_booking
+from services.booking_service import create_pending_bookings
 from services.event_service import get_event_detail, get_event_seat_inventory
 from utils.formatters import format_datetime, format_kzt, format_percent, seat_label
 
@@ -58,46 +66,70 @@ def render_page() -> None:
         st.write(f"**Reserved pending payment:** {event['reserved_count']}")
         st.write(f"**Remaining tickets:** {event['remaining_count']}")
 
+    _render_purchase_context(event)
+
     action_columns = st.columns([1, 1, 1], gap="medium")
     if action_columns[0].button("Back to events", width="stretch", type="secondary"):
         navigate_to(ROUTE_TO_PAGE["discover"], route="discover")
 
-    if event["viewer_has_paid_ticket"] and event["viewer_ticket_id"]:
-        if action_columns[1].button("Open my ticket", width="stretch", type="primary"):
-            navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=event["viewer_ticket_id"])
-        return
-
+    secondary_label = None
+    secondary_route: dict[str, int] | None = None
     if event.get("viewer_pending_booking_id"):
-        pending_seat = event.get("viewer_pending_seat")
-        seat_text = (
-            seat_label(pending_seat["category"], pending_seat["row_label"], pending_seat["seat_number"])
-            if pending_seat
-            else "Seat pending"
-        )
-        st.info(f"You already have a pending booking for {seat_text}. Continue to payment or choose a different seat below.")
-        if action_columns[1].button("Continue to payment", width="stretch", type="primary"):
-            set_selected_booking(event["viewer_pending_booking_id"])
-            navigate_to(ROUTE_TO_PAGE["payment"], route="payment", booking_id=event["viewer_pending_booking_id"])
-    else:
-        booking_disabled = not event["can_book"]
-        if action_columns[1].button("Book ticket", width="stretch", disabled=booking_disabled, type="primary"):
-            if current_user is None:
-                remember_redirect(ROUTE_TO_PAGE["event_detail"], route="event_detail", event_id=event_id)
-                flash("warning", "Sign in to choose a seat and continue to payment.")
-                navigate_to(ROUTE_TO_PAGE["sign_in"], route="sign_in")
-            st.session_state[f"eventsphere_booking_panel_{event_id}"] = True
+        secondary_label = "Continue pending payment"
+        secondary_route = {"booking_id": event["viewer_pending_booking_id"]}
+    elif event["viewer_has_paid_ticket"] and event["viewer_ticket_id"]:
+        secondary_label = "Open latest ticket"
+        secondary_route = {"ticket_id": event["viewer_ticket_id"]}
 
-        if booking_disabled:
-            action_columns[2].info("Booking is available only for upcoming events with open inventory.")
+    if secondary_label and secondary_route:
+        if action_columns[1].button(secondary_label, width="stretch", type="secondary"):
+            if "booking_id" in secondary_route:
+                set_selected_booking(secondary_route["booking_id"])
+                navigate_to(ROUTE_TO_PAGE["payment"], route="payment", booking_id=secondary_route["booking_id"])
+            else:
+                navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=secondary_route["ticket_id"])
 
-    if current_user is None or not event["can_book"]:
+    booking_disabled = not event["can_book"]
+    if action_columns[2].button(
+        "Book tickets",
+        width="stretch",
+        disabled=booking_disabled,
+        type="primary",
+    ):
+        if current_user is None:
+            remember_redirect(ROUTE_TO_PAGE["event_detail"], route="event_detail", event_id=event_id)
+            flash("warning", "Sign in to choose seats and continue to payment.")
+            navigate_to(ROUTE_TO_PAGE["sign_in"], route="sign_in")
+        st.session_state[f"eventsphere_booking_panel_{event_id}"] = True
+
+    if booking_disabled:
+        st.info("Booking is available only for upcoming events with open inventory.")
+        return
+    if current_user is None:
         return
 
-    show_booking_panel = st.session_state.get(f"eventsphere_booking_panel_{event_id}", False) or bool(event.get("viewer_pending_booking_id"))
+    show_booking_panel = st.session_state.get(f"eventsphere_booking_panel_{event_id}", False) or bool(
+        event.get("viewer_pending_booking_id")
+    )
     if not show_booking_panel:
         return
 
     _render_booking_panel(event, current_user)
+
+
+def _render_purchase_context(event: dict) -> None:
+    if event["viewer_has_paid_ticket"]:
+        st.success(
+            f"You already own {event['viewer_paid_ticket_count']} ticket"
+            f"{'' if event['viewer_paid_ticket_count'] == 1 else 's'} for this event. You can still buy more."
+        )
+    if event.get("viewer_pending_booking_id"):
+        pending_count = event.get("viewer_pending_ticket_count", 0)
+        pending_total = event.get("viewer_pending_total_amount_kzt", 0)
+        st.info(
+            f"You also have {pending_count} seat{'s' if pending_count != 1 else ''} waiting for payment"
+            f" ({format_kzt(pending_total)}). You can continue that payment or start a new seat selection below."
+        )
 
 
 def _render_booking_panel(event: dict, current_user: dict) -> None:
@@ -106,8 +138,10 @@ def _render_booking_panel(event: dict, current_user: dict) -> None:
         st.error(error or "Seat inventory could not be loaded.")
         return
 
-    st.markdown("### Step 1: Select your seat")
-    st.caption("Step 1: Select seat • Step 2: Scan payment QR • Step 3: Confirm sandbox payment on the opened page • Step 4: Receive ticket")
+    st.markdown("### Step 1: Select your seats")
+    st.caption(
+        "Step 1: Choose category and quantity • Step 2: Select seats • Step 3: Scan payment QR • Step 4: Confirm payment • Step 5: Receive tickets"
+    )
     _render_seat_legend()
 
     category_options = [item["category"] for item in inventory["categories"]]
@@ -117,72 +151,168 @@ def _render_booking_panel(event: dict, current_user: dict) -> None:
 
     selected_category = st.selectbox("Seat category", options=category_options, key=f"seat-category-{event['id']}")
     category_payload = next(item for item in inventory["categories"] if item["category"] == selected_category)
-    row_options = [row["row_label"] for row in category_payload["rows"]]
-    selected_row = st.selectbox("Row", options=row_options, key=f"seat-row-{event['id']}")
-    row_payload = next(row for row in category_payload["rows"] if row["row_label"] == selected_row)
-
-    selected_seat_key = f"eventsphere_selected_seat_{event['id']}"
-    selected_seat_id = st.session_state.get(selected_seat_key)
-    row_seat_lookup = {seat["id"]: seat for seat in row_payload["seats"]}
-    if selected_seat_id not in row_seat_lookup or row_seat_lookup[selected_seat_id]["status"] != "available":
-        st.session_state[selected_seat_key] = None
-        selected_seat_id = None
-
-    available_seats = [seat for seat in row_payload["seats"] if seat["status"] == "available"]
-    _render_seat_grid(event["id"], row_payload, selected_seat_id)
-    selected_seat_id = st.session_state.get(selected_seat_key)
-    selected_seat = row_seat_lookup.get(selected_seat_id) if selected_seat_id in row_seat_lookup else None
-
-    if not available_seats:
-        st.warning("There are no available seats left in this row. Choose a different row.")
-        return
-    if selected_seat is None:
-        st.info("Choose one available seat button to continue.")
+    available_in_category = sum(
+        1
+        for row in category_payload["rows"]
+        for seat in row["seats"]
+        if seat["status"] == "available"
+    )
+    if available_in_category <= 0:
+        st.warning("This category is sold out. Choose a different category.")
         return
 
-    st.markdown("### Selected seat summary")
-    st.write(f"**Event:** {event['title']}")
-    st.write(f"**Category:** {selected_seat['category']}")
-    st.write(f"**Row:** {selected_seat['row_label']}")
-    st.write(f"**Seat number:** {selected_seat['seat_number']}")
-    st.write(f"**Final price:** {format_kzt(selected_seat['price_kzt'])}")
+    quantity_options = list(range(1, min(available_in_category, 6) + 1))
+    quantity = st.selectbox("How many tickets?", options=quantity_options, key=f"seat-quantity-{event['id']}")
 
-    if st.button("Reserve selected seat and continue to payment", width="stretch", type="primary"):
-        booking, errors = create_pending_booking(current_user["id"], event["id"], selected_seat["id"])
+    selected_ids_key = f"eventsphere_selected_seats_{event['id']}"
+    notice_key = f"eventsphere_selection_notice_{event['id']}"
+    seat_lookup = {
+        seat["id"]: seat
+        for row in category_payload["rows"]
+        for seat in row["seats"]
+    }
+    selected_ids = _sanitize_selected_seats(
+        event["id"],
+        seat_lookup,
+        quantity=quantity,
+        selected_ids_key=selected_ids_key,
+    )
+
+    info_left, info_right, info_third = st.columns(3, gap="medium")
+    info_left.metric("Category price", format_kzt(category_payload["price_kzt"]))
+    info_right.metric("Available in category", available_in_category)
+    info_third.metric("Selected", f"{len(selected_ids)} / {quantity}")
+
+    _render_seat_rows(
+        event["id"],
+        category_payload,
+        selected_ids_key=selected_ids_key,
+        selected_ids=selected_ids,
+        quantity=quantity,
+        notice_key=notice_key,
+    )
+    selected_ids = _sanitize_selected_seats(
+        event["id"],
+        seat_lookup,
+        quantity=quantity,
+        selected_ids_key=selected_ids_key,
+    )
+
+    notice = st.session_state.get(notice_key)
+    if notice:
+        st.warning(notice)
+
+    selected_seats = [seat_lookup[seat_id] for seat_id in selected_ids if seat_id in seat_lookup]
+    selected_seats.sort(key=lambda seat: (seat["row_label"], seat["seat_number"]))
+    if not selected_seats:
+        st.info("Choose seats from the map below to continue.")
+        return
+
+    _render_selected_seat_summary(event, selected_seats, quantity)
+    can_continue = len(selected_seats) == quantity
+    if not can_continue:
+        st.caption("Select the full quantity to continue to payment.")
+
+    if st.button(
+        f"Reserve {quantity} ticket{'s' if quantity != 1 else ''} and continue to payment",
+        width="stretch",
+        type="primary",
+        disabled=not can_continue,
+    ):
+        booking, errors = create_pending_bookings(current_user["id"], event["id"], [seat["id"] for seat in selected_seats])
         for error_message in errors:
             st.warning(error_message)
-        if booking and booking.get("ticket_id"):
-            navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=booking["ticket_id"])
         if booking and booking["status"] == "pending_payment":
-            flash("success", "Seat reserved. Continue with the payment on the next screen.")
+            st.session_state[selected_ids_key] = []
+            st.session_state[notice_key] = None
+            flash(
+                "success",
+                f"{booking['ticket_count']} seat{'s' if booking['ticket_count'] != 1 else ''} reserved. Continue with payment on the next screen.",
+            )
             set_selected_booking(booking["booking_id"])
             navigate_to(ROUTE_TO_PAGE["payment"], route="payment", booking_id=booking["booking_id"])
 
 
-def _render_seat_grid(event_id: int, row_payload: dict, selected_seat_id: int | None) -> None:
+def _render_seat_rows(
+    event_id: int,
+    category_payload: dict,
+    *,
+    selected_ids_key: str,
+    selected_ids: list[int],
+    quantity: int,
+    notice_key: str,
+) -> None:
     st.markdown("### Seat map")
-    st.write(f"**Row {row_payload['row_label']}**")
-    seats = row_payload["seats"]
-    chunk_size = 5
-    for start_index in range(0, len(seats), chunk_size):
-        seat_chunk = seats[start_index : start_index + chunk_size]
-        columns = st.columns(len(seat_chunk), gap="small")
-        for column, seat in zip(columns, seat_chunk):
-            status = seat["status"]
-            is_selected = selected_seat_id == seat["id"]
-            button_type = "primary" if is_selected else "secondary"
-            button_disabled = status != "available"
-            with column:
-                if st.button(
-                    f"{seat['row_label']}-{seat['seat_number']}",
-                    key=f"seat-button-{event_id}-{seat['id']}",
-                    width="stretch",
-                    type=button_type,
-                    disabled=button_disabled,
-                ):
-                    st.session_state[f"eventsphere_selected_seat_{event_id}"] = seat["id"]
-                status_label = "Selected" if is_selected else status.replace("_", " ").title()
-                st.caption(status_label)
+    for row_payload in category_payload["rows"]:
+        st.write(f"**Row {row_payload['row_label']}**")
+        seats = row_payload["seats"]
+        chunk_size = 5
+        for start_index in range(0, len(seats), chunk_size):
+            seat_chunk = seats[start_index : start_index + chunk_size]
+            columns = st.columns(len(seat_chunk), gap="small")
+            for column, seat in zip(columns, seat_chunk):
+                status = seat["status"]
+                is_selected = seat["id"] in selected_ids
+                button_type = "primary" if is_selected else "secondary"
+                button_disabled = status != "available" and not is_selected
+                with column:
+                    if st.button(
+                        f"{seat['row_label']}-{seat['seat_number']}",
+                        key=f"seat-button-{event_id}-{seat['id']}",
+                        width="stretch",
+                        type=button_type,
+                        disabled=button_disabled,
+                    ):
+                        updated_ids, notice = _toggle_seat_selection(selected_ids, seat["id"], quantity)
+                        st.session_state[selected_ids_key] = updated_ids
+                        st.session_state[notice_key] = notice
+                        st.rerun()
+                    status_label = "Selected" if is_selected else status.replace("_", " ").title()
+                    st.caption(status_label)
+
+
+def _toggle_seat_selection(selected_ids: list[int], seat_id: int, quantity: int) -> tuple[list[int], str | None]:
+    current_ids = list(selected_ids)
+    if seat_id in current_ids:
+        current_ids.remove(seat_id)
+        return current_ids, None
+    if len(current_ids) >= quantity:
+        return current_ids, "You already selected the maximum number of tickets for this purchase. Unselect one seat to choose a different seat."
+    current_ids.append(seat_id)
+    current_ids.sort()
+    return current_ids, None
+
+
+def _sanitize_selected_seats(
+    event_id: int,
+    seat_lookup: dict[int, dict],
+    *,
+    quantity: int,
+    selected_ids_key: str,
+) -> list[int]:
+    selected_ids = [
+        seat_id
+        for seat_id in st.session_state.get(selected_ids_key, [])
+        if seat_id in seat_lookup and seat_lookup[seat_id]["status"] == "available"
+    ]
+    if len(selected_ids) > quantity:
+        selected_ids = selected_ids[:quantity]
+    st.session_state[selected_ids_key] = selected_ids
+    st.session_state.setdefault(f"eventsphere_booking_panel_{event_id}", True)
+    return selected_ids
+
+
+def _render_selected_seat_summary(event: dict, selected_seats: list[dict], quantity: int) -> None:
+    total_amount = sum(seat["price_kzt"] for seat in selected_seats)
+    st.markdown("### Selected ticket summary")
+    st.write(f"**Event:** {event['title']}")
+    st.write(f"**Quantity:** {len(selected_seats)} / {quantity}")
+    st.write(f"**Category:** {selected_seats[0]['category']}")
+    for index, seat in enumerate(selected_seats, start=1):
+        st.write(
+            f"**Seat {index}:** {seat_label(seat['category'], seat['row_label'], seat['seat_number'])} • {format_kzt(seat['price_kzt'])}"
+        )
+    st.write(f"**Total price:** {format_kzt(total_amount)}")
 
 
 def _render_seat_legend() -> None:

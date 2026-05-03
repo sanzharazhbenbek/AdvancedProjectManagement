@@ -43,6 +43,7 @@ def render_page() -> None:
         stats=[
             {"label": "Booking ID", "value": context["booking_id"]},
             {"label": "Amount", "value": format_kzt(context["amount_kzt"])},
+            {"label": "Tickets", "value": context["ticket_count"]},
             {"label": "Deadline", "value": format_countdown(context["payment_deadline"])},
             {"label": "Provider", "value": "Kaspi Sandbox"},
         ],
@@ -51,14 +52,13 @@ def render_page() -> None:
 
     left, right = st.columns([1, 1], gap="large")
     with left:
-        st.markdown("### Selected seat")
+        st.markdown("### Selected tickets")
         st.write(f"**Event:** {context['event']['title']}")
         st.write(f"**Customer email:** {context['customer_email']}")
-        st.write(
-            f"**Seat:** {seat_label(context['seat']['category'], context['seat']['row_label'], context['seat']['seat_number'])}"
-            if context["seat"]
-            else "**Seat:** Not assigned"
-        )
+        for index, seat in enumerate(context["seats"], start=1):
+            st.write(
+                f"**Seat {index}:** {seat_label(seat['category'], seat['row_label'], seat['seat_number'])} • {format_kzt(seat['price_kzt'])}"
+            )
         st.write(f"**Date:** {format_datetime(context['event']['event_datetime'])}")
         st.write(f"**Payment reference:** {mask_reference(context['payment']['payment_reference'])}")
         st.write(f"**Payment status:** {context['payment']['status'].replace('_', ' ').title()}")
@@ -72,8 +72,9 @@ def render_page() -> None:
 
     if context["booking_status"] == "paid" and context["ticket_id"]:
         st.success("Payment already confirmed.")
-        if st.button("Open ticket", width="stretch", type="primary"):
-            navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=context["ticket_id"])
+        label = "Open tickets" if context["ticket_count"] > 1 else "Open ticket"
+        if st.button(label, width="stretch", type="primary"):
+            _open_post_payment_destination(context)
         return
 
     if context["booking_status"] in {"cancelled", "expired"}:
@@ -93,6 +94,13 @@ def render_page() -> None:
             navigate_to(ROUTE_TO_PAGE["event_detail"], route="event_detail", event_id=context["event"]["id"])
         else:
             st.error(message)
+
+
+def _open_post_payment_destination(context: dict) -> None:
+    if context["ticket_count"] > 1:
+        navigate_to(ROUTE_TO_PAGE["user_dashboard"], route="user_dashboard")
+        return
+    navigate_to(ROUTE_TO_PAGE["ticket"], route="ticket", ticket_id=context["ticket_id"])
 
 
 def _read_booking_id() -> int | None:

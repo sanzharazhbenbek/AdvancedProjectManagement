@@ -6,7 +6,7 @@ from typing import Any
 from db.database import session_scope
 from db.repositories import BookingRepository, EventRepository, get_available_counts_by_event, get_checked_in_counts_by_event, get_paid_counts_by_event, get_reserved_counts_by_event, get_revenue_by_event
 from services.booking_service import _expire_pending_bookings_in_session
-from services.event_service import derive_event_runtime_status, serialize_event
+from services.event_service import _build_group_primary_map, _resolve_group_payment_booking, derive_event_runtime_status, serialize_event
 
 
 def get_organizer_dashboard(organizer_id: int) -> dict[str, Any]:
@@ -31,6 +31,7 @@ def _build_dashboard_payload(session, events, include_recent_bookings: bool = Fa
     reserved_map = get_reserved_counts_by_event(session, event_ids)
     revenue_map = get_revenue_by_event(session, event_ids)
     bookings = BookingRepository(session).list_for_events(event_ids) if event_ids else []
+    booking_primary_map = _build_group_primary_map(bookings)
     rows: list[dict[str, Any]] = []
     category_counter: Counter[str] = Counter()
     total_capacity = 0
@@ -66,7 +67,9 @@ def _build_dashboard_payload(session, events, include_recent_bookings: bool = Fa
             "status": booking.status,
             "amount_kzt": booking.amount_kzt,
             "created_at": booking.created_at,
-            "payment_reference": booking.payment.payment_reference if booking.payment else None,
+            "payment_reference": _resolve_group_payment_booking(booking, booking_primary_map).payment.payment_reference
+            if _resolve_group_payment_booking(booking, booking_primary_map).payment
+            else None,
             "seat_category": booking.seat.category if booking.seat else None,
             "row_label": booking.seat.row_label if booking.seat else None,
             "seat_number": booking.seat.seat_number if booking.seat else None,
