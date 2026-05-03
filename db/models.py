@@ -111,7 +111,7 @@ class PaymentSimulation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), nullable=False, index=True)
-    provider: Mapped[str] = mapped_column(String(60), nullable=False, default="kaspi_sandbox")
+    provider: Mapped[str] = mapped_column(String(60), nullable=False, default="kaspi")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
     payment_reference: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     qr_payload: Mapped[str] = mapped_column(Text, nullable=False)
@@ -154,7 +154,7 @@ class EmailLog(Base):
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attachment_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="simulated")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="delivered")
     booking_id: Mapped[int | None] = mapped_column(ForeignKey("bookings.id"), nullable=True, index=True)
     ticket_id: Mapped[int | None] = mapped_column(ForeignKey("tickets.id"), nullable=True, index=True)
     event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)

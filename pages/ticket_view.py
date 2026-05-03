@@ -74,13 +74,14 @@ def render_page() -> None:
         if st.button("Back to event", width="stretch", type="secondary"):
             navigate_to(ROUTE_TO_PAGE["event_detail"], route="event_detail", event_id=detail["event"]["id"])
 
-    st.markdown("### Email delivery")
+    st.markdown("### Confirmation details")
     if not detail["email_logs"]:
-        st.info("No email log was found for this ticket.")
+        st.info("No delivery record was found for this ticket.")
     else:
         for email_log in detail["email_logs"]:
+            status_label = _format_delivery_status(email_log["status"])
             st.write(
-                f"**{email_log['status'].title()}** • {email_log['recipient_email']} • {format_datetime(email_log['created_at'])}"
+                f"**{status_label}** • {email_log['recipient_email']} • {format_datetime(email_log['created_at'])}"
             )
             st.caption(email_log["subject"])
 
@@ -90,6 +91,12 @@ def _read_ticket_id() -> int | None:
     if raw:
         return int(raw)
     return get_selected_ticket()
+
+
+def _format_delivery_status(status: str) -> str:
+    if status in {"simulated", "delivered"}:
+        return "Delivered"
+    return status.replace("_", " ").title()
 
 
 render_page()

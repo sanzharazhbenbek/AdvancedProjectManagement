@@ -1,6 +1,6 @@
 # EventSphere
 
-EventSphere is a Streamlit-based event and ticketing management platform built to feel closer to a production-style SaaS workflow than a classroom MVP. It supports event discovery, persistent seat inventory, role-based authentication, organizer operations, simulated Kaspi-style QR payments, digital tickets, email delivery logs, and QR/manual attendance check-in.
+EventSphere is a Streamlit-based event and ticketing management platform built around a production-style SaaS workflow. It supports event discovery, persistent seat inventory, role-based authentication, organizer operations, Kaspi-style QR payments, digital tickets, delivery logs, and QR/manual attendance check-in.
 
 ## What’s Included
 
@@ -11,7 +11,7 @@ EventSphere is a Streamlit-based event and ticketing management platform built t
 - persistent per-event seat maps with category, row, seat number, and status tracking
 - pending booking flow with expiring seat reservations and token-based QR payment confirmation
 - QR ticket generation and per-ticket validation
-- ticket delivery simulation with saved email logs and downloadable ticket files
+- ticket delivery records with saved email logs and downloadable ticket files
 - organizer dashboards with KPIs, event management, attendee lists, and reports
 - admin dashboards with user/event management, operational tables, exports, and platform reporting
 - first-run seeding with realistic Kazakhstan event data
@@ -59,7 +59,7 @@ EventSphere is a Streamlit-based event and ticketing management platform built t
 - Organizer: `organizer@eventsphere.local` / `Organizer123!`
 - User: `user@eventsphere.local` / `User123!`
 
-The app also seeds a few extra demo attendees so organizer and admin reports have realistic sample data on first run.
+The app also seeds a few extra attendee records so organizer and admin reports have realistic activity on first run.
 
 ## Seeded Event Examples
 
@@ -72,20 +72,18 @@ First run adds at least six realistic Kazakhstan-based events, including:
 - a workshop
 - a conference
 
-## Booking and Payment Simulation Flow
+## Booking and Payment Flow
 
 1. Browse events on `Discover events`.
 2. Open an event detail page.
 3. Click `Book ticket`.
 4. Choose a seat category, row, and available seat.
 5. EventSphere creates a `pending_payment` booking and marks that seat as `reserved_pending_payment`.
-6. The user is redirected to the sandbox payment waiting page.
+6. The user is redirected to the payment waiting page.
 7. The waiting page shows the amount, booking ID, payment reference, deadline, and a QR code only.
 8. The QR opens a dedicated confirmation page with a secure token.
 9. Confirming payment on that QR page marks the payment as confirmed, converts the seat to `sold`, creates the digital ticket, and writes an email log with the ticket attachment path.
 10. The ticket page shows the QR ticket, seat details, delivery status, and download action.
-
-No real money is charged anywhere in the flow.
 
 Pending bookings automatically expire after the configured payment window and release their reserved seats back to inventory.
 
@@ -134,7 +132,7 @@ streamlit run app.py
 
 - `DATABASE_URL`: optional custom database connection string
 - `PUBLIC_APP_URL`: base URL used in payment and ticket QR payloads
-- `PAYMENT_WINDOW_MINUTES`: optional sandbox payment expiration window
+- `PAYMENT_WINDOW_MINUTES`: optional payment expiration window
 
 ## Deployment Notes
 
@@ -144,7 +142,7 @@ This app is designed to stay deployable on Streamlit Cloud:
 - deploy from the GitHub branch Streamlit Cloud watches
 - automatic redeploy should happen whenever that branch is pushed
 
-For real long-term persistence in production, replace SQLite with a managed database. On Streamlit Cloud, SQLite is suitable for demos and light usage, but not for guaranteed durable storage across all infrastructure events.
+For long-term persistence in production, replace SQLite with a managed database. On Streamlit Cloud, SQLite is suitable for light usage, but not for guaranteed durable storage across all infrastructure events.
 
 ## Screenshots
 
@@ -152,7 +150,7 @@ Add screenshots here after running the upgraded app:
 
 - Discover page
 - Event detail page
-- Payment simulator
+- Payment page
 - Ticket view
 - Organizer dashboard
 - Admin dashboard

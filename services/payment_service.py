@@ -251,7 +251,7 @@ def _ensure_payment(session, booking_id: int):
 
     payment = payment_repo.create(
         booking_id=booking_id,
-        provider="kaspi_sandbox",
+        provider="kaspi",
         status="pending",
         payment_reference=f"KSP-{secrets.token_hex(4).upper()}",
         qr_payload=confirmation_url,

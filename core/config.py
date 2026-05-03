@@ -11,7 +11,7 @@ class Settings:
     brand_name: str = "EventSphere"
     timezone_name: str = "Asia/Almaty"
     currency_code: str = "KZT"
-    payment_provider: str = "kaspi_sandbox"
+    payment_provider: str = "kaspi"
     payment_window_minutes: int = int(os.getenv("PAYMENT_WINDOW_MINUTES", "15"))
     session_user_key: str = "eventsphere_user_id"
     session_redirect_key: str = "eventsphere_redirect_target"

@@ -9,7 +9,7 @@ from core.config import settings
 from core.security import hash_password, normalize_email
 from db.database import Base, get_engine, session_scope
 from db.migrations import migrate_database_if_needed
-from db.models import Booking, Event, PaymentSimulation, Seat, Ticket, User
+from db.models import Booking, EmailLog, Event, PaymentSimulation, Seat, Ticket, User
 from db.repositories import EmailLogRepository, SeatRepository, TicketRepository
 from services.delivery_service import create_ticket_delivery
 from services.qr_service import build_payment_confirmation_payload, build_ticket_payload
@@ -40,9 +40,9 @@ DEFAULT_USERS = [
 ]
 
 EXTRA_ATTENDEES = [
-    {"full_name": "Aigerim Bekova", "email": "aigerim.demo@eventsphere.local"},
-    {"full_name": "Timur Kassen", "email": "timur.demo@eventsphere.local"},
-    {"full_name": "Madina Ospan", "email": "madina.demo@eventsphere.local"},
+    {"full_name": "Aigerim Bekova", "email": "aigerim.bekova@eventsphere.local"},
+    {"full_name": "Timur Kassen", "email": "timur.kassen@eventsphere.local"},
+    {"full_name": "Madina Ospan", "email": "madina.ospan@eventsphere.local"},
 ]
 
 DEFAULT_EVENTS = [
@@ -146,13 +146,19 @@ DEFAULT_EVENTS = [
     },
 ]
 
-SAMPLE_BOOKINGS = [
+INITIAL_BOOKINGS = [
     ("user@eventsphere.local", "UX Sprint Workshop: Service Design in Practice", "valid"),
-    ("aigerim.demo@eventsphere.local", "Almaty AI & Product Summit", "valid"),
-    ("timur.demo@eventsphere.local", "Astana Startup Capital Breakfast", "valid"),
-    ("madina.demo@eventsphere.local", "Silk Road Live Sessions", "valid"),
-    ("aigerim.demo@eventsphere.local", "Almaty Data Leaders Meetup", "used"),
+    ("aigerim.bekova@eventsphere.local", "Almaty AI & Product Summit", "valid"),
+    ("timur.kassen@eventsphere.local", "Astana Startup Capital Breakfast", "valid"),
+    ("madina.ospan@eventsphere.local", "Silk Road Live Sessions", "valid"),
+    ("aigerim.bekova@eventsphere.local", "Almaty Data Leaders Meetup", "used"),
 ]
+
+LEGACY_ATTENDEE_EMAILS = {
+    "aigerim.demo@eventsphere.local": "aigerim.bekova@eventsphere.local",
+    "timur.demo@eventsphere.local": "timur.kassen@eventsphere.local",
+    "madina.demo@eventsphere.local": "madina.ospan@eventsphere.local",
+}
 
 
 def initialize_database() -> None:
@@ -164,7 +170,7 @@ def initialize_database() -> None:
     with session_scope() as session:
         seed_database_if_empty(session)
         _backfill_legacy_records(session)
-        _seed_demo_bookings(session)
+        _seed_initial_bookings(session)
 
 
 def seed_database_if_empty(session) -> None:
@@ -195,7 +201,7 @@ def _seed_users(session) -> None:
                 User(
                     full_name=attendee["full_name"],
                     email=email,
-                    password_hash=hash_password("DemoUser123!"),
+                    password_hash=hash_password("Attendee123!"),
                     role="user",
                     is_active=True,
                 )
@@ -248,7 +254,16 @@ def _seed_events(session) -> None:
 
 
 def _backfill_legacy_records(session) -> None:
+    for old_email, new_email in LEGACY_ATTENDEE_EMAILS.items():
+        legacy_user = session.scalar(select(User).where(User.email == old_email))
+        replacement_user = session.scalar(select(User).where(User.email == new_email))
+        if legacy_user is not None and replacement_user is None:
+            legacy_user.email = new_email
+            session.add(legacy_user)
+
     for booking in session.scalars(select(Booking)).all():
+        if booking.customer_email in LEGACY_ATTENDEE_EMAILS:
+            booking.customer_email = LEGACY_ATTENDEE_EMAILS[booking.customer_email]
         if not booking.customer_email and booking.user_id:
             user = session.get(User, booking.user_id)
             booking.customer_email = user.email if user else None
@@ -271,9 +286,18 @@ def _backfill_legacy_records(session) -> None:
         booking = session.get(Booking, payment.booking_id)
         if booking is None or not booking.payment_confirmation_token:
             continue
+        if payment.provider == "kaspi_sandbox":
+            payment.provider = settings.payment_provider
         payment.qr_payload = build_payment_confirmation_payload(booking.payment_confirmation_token)
         payment.confirmed_url_path = payment.qr_payload
         session.add(payment)
+
+    for email_log in session.scalars(select(EmailLog)).all():
+        if email_log.recipient_email in LEGACY_ATTENDEE_EMAILS:
+            email_log.recipient_email = LEGACY_ATTENDEE_EMAILS[email_log.recipient_email]
+        if email_log.status == "simulated":
+            email_log.status = "delivered"
+        session.add(email_log)
 
     session.flush()
 
@@ -315,12 +339,13 @@ def _backfill_legacy_records(session) -> None:
                 mark_seat_sold(session, seat.id, ticket.booking_id)
         if not ticket.qr_payload or ticket.qr_payload == "pending":
             ticket.qr_payload = build_ticket_payload(ticket.id, ticket.ticket_code)
+        ticket.ticket_file_path = None
         create_ticket_delivery(session, ticket)
         session.add(ticket)
 
 
-def _seed_demo_bookings(session) -> None:
-    for email, event_title, ticket_status in SAMPLE_BOOKINGS:
+def _seed_initial_bookings(session) -> None:
+    for email, event_title, ticket_status in INITIAL_BOOKINGS:
         user = session.scalar(select(User).where(User.email == email))
         event = session.scalar(select(Event).where(Event.title == event_title))
         if user is None or event is None:

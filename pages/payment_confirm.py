@@ -65,7 +65,7 @@ def render_page() -> None:
         return
 
     left, right = st.columns(2, gap="medium")
-    if left.button("Confirm sandbox payment", width="stretch", type="primary"):
+    if left.button("Confirm payment", width="stretch", type="primary"):
         result, errors = confirm_payment_with_token(token)
         if errors:
             for error_message in errors:
@@ -73,7 +73,7 @@ def render_page() -> None:
         elif result is not None:
             flash(
                 "success",
-                f"Sandbox payment confirmed and {result['ticket_count']} ticket"
+                f"Payment confirmed and {result['ticket_count']} ticket"
                 f"{'' if result['ticket_count'] == 1 else 's'} issued.",
             )
             _open_post_payment_destination(result)

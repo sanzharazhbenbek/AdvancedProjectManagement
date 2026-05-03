@@ -14,7 +14,7 @@ from utils.formatters import format_datetime, format_kzt, mask_reference, seat_l
 
 
 def render_page() -> None:
-    bootstrap_page("Payment Simulator")
+    bootstrap_page("Payment Status")
     current_user = get_current_user()
     if current_user is None:
         booking_id = _read_booking_id()
@@ -39,13 +39,13 @@ def render_page() -> None:
 
     render_page_header(
         "Payment instructions",
-        "Step 1: Keep this page open. Step 2: Scan the QR on another device. Step 3: Confirm sandbox payment on the opened page. Step 4: Return here and refresh your status.",
+        "Step 1: Keep this page open. Step 2: Scan the QR on another device. Step 3: Confirm the payment on the opened page. Step 4: Return here and refresh your status.",
         stats=[
             {"label": "Booking ID", "value": context["booking_id"]},
             {"label": "Amount", "value": format_kzt(context["amount_kzt"])},
             {"label": "Tickets", "value": context["ticket_count"]},
             {"label": "Deadline", "value": format_countdown(context["payment_deadline"])},
-            {"label": "Provider", "value": "Kaspi Sandbox"},
+            {"label": "Provider", "value": "Kaspi QR"},
         ],
     )
     render_status_pills(context["event"]["category"], context["booking_status"])
@@ -68,7 +68,7 @@ def render_page() -> None:
         qr_payload = context["payment"].get("qr_payload") or ""
         if qr_payload:
             st.image(generate_qr_image(qr_payload), width=280)
-        st.caption("Use the QR code to open the sandbox confirmation page on another device. The raw confirmation URL is intentionally hidden.")
+        st.caption("Use the QR code to open the payment confirmation page on another device. The raw confirmation URL is intentionally hidden.")
 
     if context["booking_status"] == "paid" and context["ticket_id"]:
         st.success("Payment already confirmed.")

@@ -118,16 +118,11 @@ def render_page() -> None:
 
 
 def _render_purchase_context(event: dict) -> None:
-    if event["viewer_has_paid_ticket"]:
-        st.success(
-            f"You already own {event['viewer_paid_ticket_count']} ticket"
-            f"{'' if event['viewer_paid_ticket_count'] == 1 else 's'} for this event. You can still buy more."
-        )
     if event.get("viewer_pending_booking_id"):
         pending_count = event.get("viewer_pending_ticket_count", 0)
         pending_total = event.get("viewer_pending_total_amount_kzt", 0)
         st.info(
-            f"You also have {pending_count} seat{'s' if pending_count != 1 else ''} waiting for payment"
+            f"You have {pending_count} seat{'s' if pending_count != 1 else ''} waiting for payment"
             f" ({format_kzt(pending_total)}). You can continue that payment or start a new seat selection below."
         )
 

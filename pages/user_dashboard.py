@@ -39,7 +39,7 @@ def render_page() -> None:
         st.write("Your profile is tied directly to the SQLite-backed ticket ledger, so reruns keep your active tickets and event links stable.")
 
     if not tickets:
-        render_empty_state("No tickets yet", "Browse an event, complete the sandbox payment, and your QR ticket will show up here.")
+        render_empty_state("No tickets yet", "Browse an event, complete the payment, and your QR ticket will show up here.")
         return
 
     st.subheader("Ticket wallet")
