@@ -68,7 +68,7 @@ def render_page() -> None:
         qr_payload = context["payment"].get("qr_payload") or ""
         if qr_payload:
             st.image(generate_qr_image(qr_payload), width=280)
-        st.caption("Use the QR code to open the payment confirmation page on another device. The raw confirmation URL is intentionally hidden.")
+        st.caption("Use the QR code to open the payment confirmation page on another device.")
 
     if context["booking_status"] == "paid" and context["ticket_id"]:
         st.success("Payment already confirmed.")

@@ -32,11 +32,9 @@ def render_page() -> None:
         ],
     )
 
-    profile_col, info_col = st.columns([1, 2], gap="large")
+    profile_col, _ = st.columns([1, 2], gap="large")
     with profile_col:
         st.info(f"{current_user['full_name']}\n\n{current_user['role_label']}")
-    with info_col:
-        st.write("Your profile is tied directly to the SQLite-backed ticket ledger, so reruns keep your active tickets and event links stable.")
 
     if not tickets:
         render_empty_state("No tickets yet", "Browse an event, complete the payment, and your QR ticket will show up here.")
